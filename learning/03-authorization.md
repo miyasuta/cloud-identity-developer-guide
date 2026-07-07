@@ -117,6 +117,21 @@ POLICY SalesRepresentative {
 | ロールコレクションでの属性値割当 | 管理者が派生する **実行時ポリシー**（`USE ... RESTRICT`） |
 | （CAP）ロール | **`ASSIGN ROLE`**（＝ `$SCOPES` 上のアクション） |
 
+### ポリシーの移送 — base policy は「コードとして移送」、custom policy は「テナントに残る」
+
+実運用では「本番の Admin Console で直接いじる」のではなく「開発環境で変更して移送する」流れを想定するはずです。DCL のポリシーは、この観点で **2 種類** に分かれます。
+
+| 種類 | 誰が作る | どこに存在 | 移送 |
+|---|---|---|---|
+| **base policy**（`DEFAULT` / `INTERNAL` も含む） | 開発者（DCL ソース） | **全テナント**（アプリと一緒にデプロイ） | ✅ **ソースとして移送**（deployer app） |
+| **custom policy** | テナント管理者（Admin Console） | **その顧客テナントのみ** | ❌ 移送対象ではない（テナントローカルな運用データ） |
+
+- **base policy**: `*.dcl` に宣言的に書き、**AMS Policies Deployer App** で AMS インスタンスへアップロードします。deployer は **MTA タスク / CF アプリ / Kyma ジョブ** のいずれでも実行でき、CAP では `cds add ams` が自動構成します。これが dev → test → prod の移送ルートです（[Deploying DCL](../docs/Authorization/DeployDCL.md)）。
+- **custom policy**: 管理者が Admin Console で base policy から派生（`USE ... RESTRICT`）して作るもので、**その顧客テナントにしか存在しません**。設計上、移送する類のものではなく、テナント固有のカスタマイズを担います。
+- 全テナントで「割当なしに自動適用」したい認可は、**`DEFAULT POLICY`** として base policy に含めれば、移送で全テナントに行き渡ります。
+
+> つまり切り分けはこうです——**アプリとして届けたい認可は base policy（DCL）として書いて移送し、テナント個別の調整だけを Admin Console に任せる**。「Admin Console で手作りしたものを移送する」経路は基本ありません。base policy を更新して移送する際は、既存の custom policy が参照する定義を壊さないよう **後方互換** に注意します（[Changing DCL](../docs/Authorization/ChangingDCL.md) の Forbidden Changes）。
+
 ---
 
 ## 3. インスタンスベース（行レベル）認可 🔑
