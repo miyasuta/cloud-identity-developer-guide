@@ -47,7 +47,7 @@ XSUAA が「認証委譲・トークン発行・認可（scope）」を **一手
 | ページ | 内容 |
 |---|---|
 | [App-to-App 連携の設定と証明書運用](app2app-and-certificate-operations.md) | dependency 登録・Destination 設定・証明書のローテーション運用（02 の認証方式に対する設定/運用面） |
-| 共有 IAS アプリと集中 DCL（複数 CAP 構成）*(作成予定)* | 複数の CAP マイクロサービスが 1 つの IAS/AMS アプリ（`identity` インスタンス）を共有する場合の、集中 DCL（schema＋base policy）と各 CAP 側の設定・ビルド（03 の DCL/ポリシーに対する構成面） |
+| [共有 IAS アプリと集中 DCL（複数 CAP 構成）](shared-ias-app-central-dcl.md) | 複数の CAP マイクロサービスが 1 つの IAS/AMS アプリ（`identity` インスタンス）を共有する場合の、集中 DCL（schema＋base policy）と各 CAP 側の設定・ビルド（03 の DCL/ポリシーに対する構成面） |
 
 ## 関連する公開ドキュメント
 
