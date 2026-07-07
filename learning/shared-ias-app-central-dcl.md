@@ -159,13 +159,39 @@ CAP の AMS プラグイン設定は `requires.auth.ams`（[cds env](../docs/CAP
 
 ### 中央 DCL の取り込み方
 
-中央リポジトリの `dcl` フォルダを、各サービスのリポジトリで参照します（[DeployDCL: Accessing central DCL files](../docs/Authorization/DeployDCL.md#accessing-central-dcl-files)）。
+中央リポジトリの `dcl` フォルダを、各サービスのリポジトリで参照します（[DeployDCL: Accessing central DCL files](../docs/Authorization/DeployDCL.md#accessing-central-dcl-files)）。代表的な手段は次の 3 つです。
 
 - **git submodule ＋ `git sparse-checkout`（cone mode）** — `dcl` フォルダだけをチェックアウト
 - **symbolic link** — submodule の `dcl` をサービス内の特定パスへリンク
-- **`dclRoot` 設定** — 上記のように submodule のフォルダを直接指す
+- **`dclRoot` 設定** — 取り込んだフォルダを直接指す
 
 git submodule を使わない場合の代替: **Git monorepo** / **NPM workspaces** / **Maven modules**。
+
+#### submodule ＋ sparse-checkout の具体手順
+
+中央リポジトリを submodule として追加し、cone モードの sparse-checkout で **`dcl` フォルダだけ** を取り込みます（`ams-policies-deployer/` などは展開しない）。
+
+```bash
+# ① 中央リポジトリを submodule として追加
+git submodule add https://github.com/acme/central-authz.git central-authz
+
+# ② submodule 内で dcl フォルダだけに絞る（set が cone モードで自動初期化）
+git -C central-authz sparse-checkout set dcl
+
+git add .gitmodules central-authz
+git commit -m "Add central-authz submodule (dcl only)"
+```
+
+sparse-checkout の設定は **submodule のローカルにのみ保存され `.gitmodules` には載りません**。そのため、このリポジトリを clone した各メンバーは初期化後に **もう一度** 絞り込みます（bootstrap スクリプトにまとめると確実）。
+
+```bash
+git submodule update --init
+git -C central-authz sparse-checkout set dcl
+```
+
+あとは `dclRoot` を submodule 内の `dcl` に向けます（例: `"dclRoot": "central-authz/dcl"`）。中央 DCL を更新したら `git submodule update --remote central-authz` → コミットで追従します。
+
+> **`dclRoot` はプロジェクト外を指せる？** 技術的にはローカルの `cds build`/`cds watch` は `../shared/dcl` のような外部パスでもファイルを見つけられますが、**推奨しません**。`cds build` の生成物（`gen/`）や deployer アプリは**プロジェクト配下からパッケージ**され、**MTA モジュール／`cf push`／Docker ビルドコンテキストはプロジェクト外のファイルを含めません**。外部ディレクトリを指すと **CI/CD・クラウドビルドで DCL が欠落** します。だからこそ、submodule や symbolic link で中央 DCL を **プロジェクト内に取り込んでから** `dclRoot` で指す、というのが定石です。
 
 > 実行時のコードは変わりません。各サービスは共有 `identity` にバインドしているだけで、`@sap/ams` プラグインが **同じ bundle を自動でダウンロード** して認可チェックを行います。共有構成で特別なのは **ビルド／デプロイの構成** であって、ランタイムの実装ではありません。
 
