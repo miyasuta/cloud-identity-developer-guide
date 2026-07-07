@@ -19,8 +19,8 @@ flowchart LR
     User --> IdP -->|SAML/OIDC| XSUAA
     XSUAA -->|"JWT（scope 入り）"| App
 
-    style XSUAA fill:#f9d5d5,stroke:#c0392b,stroke-width:2px
-    style App fill:#d5e8f9,stroke:#2980b9
+    style XSUAA fill:#f9d5d5,stroke:#c0392b,stroke-width:2px,color:#1a1a1a
+    style App fill:#d5e8f9,stroke:#2980b9,color:#1a1a1a
 ```
 
 ポイントは **発行される JWT の中に認可情報（scope / role）が詰め込まれている** ことです。アプリはトークンを検証し、その中の scope を見るだけで「この操作を許可してよいか」を判断できました。
@@ -49,9 +49,9 @@ flowchart LR
     DCL -.読み込み.-> AMS
     AMS -->|許可 / 拒否 / フィルタ| App
 
-    style IAS fill:#d5f9e0,stroke:#27ae60,stroke-width:2px
-    style AMS fill:#f9e6d5,stroke:#e67e22,stroke-width:2px
-    style App fill:#d5e8f9,stroke:#2980b9
+    style IAS fill:#d5f9e0,stroke:#27ae60,stroke-width:2px,color:#1a1a1a
+    style AMS fill:#f9e6d5,stroke:#e67e22,stroke-width:2px,color:#1a1a1a
+    style App fill:#d5e8f9,stroke:#2980b9,color:#1a1a1a
 ```
 
 決定的な違いは、**トークンには「誰であるか（本人性）」しか入らず、「何をしてよいか（認可）」は実行時に AMS が判定する** ことです。
@@ -83,8 +83,8 @@ flowchart TB
     X2 --> A1
     X3 --> A2
 
-    style BEFORE fill:#f9d5d5,stroke:#c0392b
-    style AFTER fill:#d5f9e0,stroke:#27ae60
+    style BEFORE fill:#f9d5d5,stroke:#c0392b,color:#1a1a1a
+    style AFTER fill:#d5f9e0,stroke:#27ae60,color:#1a1a1a
 ```
 
 | 観点 | XSUAA | CIS（IAS + AMS） |
@@ -113,7 +113,7 @@ flowchart TB
 
 ## 次に読む
 
-- **02. 認証の違い** — IAS が OIDC 発行者になること、証明書 / mTLS、トークン構造の実物
+- **[02. 認証の違い](02-authentication.md)** — IAS が OIDC 発行者になること、証明書 / mTLS、トークン構造の実物
 - **03. 認可の違い** — scope から DCL ポリシー・実行時 PDP・インスタンスベース認可へ
 
 *(02 以降は順次作成します)*
