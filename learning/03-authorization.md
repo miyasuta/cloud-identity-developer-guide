@@ -18,7 +18,7 @@ CIS/AMS では、認可は **DCL で書いたポリシー** になり、**実行
 | 認可モデル | 静的 RBAC（scope / role） | **ポリシーベース**（DCL、ABAC 対応） |
 | 定義の置き場所 | `xs-security.json`（scope / role-template） | **DCL ファイル**（`*.dcl`） |
 | 認可情報の運び方 | **トークンの `scope`** に埋め込み | トークンには載せない（**実行時評価**） |
-| 判定単位 | ロールの有無（真偽） | ロール＋**属性・行レベル**の条件 |
+| 行レベルの絞り込み | 可能。ただし条件は**コードに固定**（変更＝再デプロイ） | 可能。**管理者が実行時に**調整（`USE ... RESTRICT`） |
 | 変更の反映 | トークン再発行が必要 | **実行時に反映**（ポリシー更新が伝播） |
 | アプリの判定方法 | `scope` を読む | **AMS へ問い合わせ**（ローカル PDP、→ §4） |
 
@@ -77,13 +77,33 @@ POLICY ReadOfficeSupplies {
 
 ### CAP の場合は「ロールベース」
 
-CAP アプリケーションでは、認可は引き続き **ロールベース** です。CAP の `@requires` / `@restrict` アノテーションが「どのロールがどの操作をしてよいか」を既に定義しているため、DCL 側は **「ユーザーにロールを割り当てる」** ことに使います。
+CAP アプリケーションでは、認可は引き続き **ロールベース** です。役割分担は次のとおりで、**cds アノテーションと DCL がセット** で機能します。
+
+- **cds モデル側（`@requires` / `@restrict`）**: 「**どのロールが・どの操作をしてよいか**」を定義する。ここは XSUAA 時代と同じ書き方です。
+- **DCL 側（`ASSIGN ROLE`）**: そのロールを「**どのユーザーに割り当てるか**」を定義する。
+
+```cds
+// cds モデル側：ロールが「何をしてよいか」を定義（XSUAA でも同じアノテーション）
+service SalesService {
+    @(requires: 'SalesManager')                          // サービス全体に必要なロール
+    entity Products as projection on my.db.Products;
+
+    @(restrict: [
+        { grant: ['READ','WRITE'], to: 'SalesManager' },
+        { grant: 'READ',           to: 'SalesRepresentative' }
+    ])                                                    // 操作ごとに許可ロールを指定
+    entity SalesOrders as projection on my.db.SalesOrders;
+}
+```
 
 ```dcl
+// DCL 側：上のロールを「誰に割り当てるか」を定義
 POLICY SalesRepresentative {
     ASSIGN ROLE SalesRepresentative;
 }
 ```
+
+つまり、XSUAA では「ロールコレクション ⇄ role-template（`xs-security.json`）」で担っていた **ロールの割当** が、CAP + AMS では **DCL の `ASSIGN ROLE` ポリシー** に置き換わります。cds の `@requires`/`@restrict` はそのまま流用できます。
 
 `ASSIGN ROLE` は DCL の糖衣構文で、内部的には **`$SCOPES` という特別なリソース上のアクション** として表現されます（`GRANT SalesRepresentative ON $SCOPES;` と等価）。CAP プロジェクトでは、通常この `$SCOPES` が唯一の AMS リソースになります。
 
@@ -101,19 +121,30 @@ POLICY SalesRepresentative {
 
 ## 3. インスタンスベース（行レベル）認可 🔑
 
-XSUAA で最も苦しかったのが **「この本は読めるが、あの本は読めない」** のような **行レベル（インスタンスベース）** の制御です。scope は真偽値なので、「どのデータか」まではアプリが自前で `WHERE` を書いて絞るしかありませんでした。
+**「この本は読めるが、あの本は読めない」** のような **行レベル（インスタンスベース）** の絞り込み自体は、XSUAA でも可能でした。CAP なら `@restrict` の `where` 条件でフィルタを書けます。
 
-DCL では、`RESTRICT` した属性条件が **フィルタとして返り**、データ取得の `WHERE` に反映されます。CAP プロジェクトでは、この変換が **自動** です（AMS プラグインが認可条件を CQL/CXN 式へ翻訳。非 CAP でも SQL 抽出器などで同じことができます）。
+```cds
+// XSUAA 時代：絞り込み条件はアプリのソースコードに書く
+entity Books @(restrict: [
+    { grant: 'READ', to: 'Reader', where: 'genre = $user.genre' }
+]);
+```
 
-例として、bookshop の「ジャンルで読める本を絞る」ポリシーを見ます。
+本当の違いは **「絞り込み条件を *どこで* 決めるか」** です。
+
+- **XSUAA**: `where` 条件は **アプリのソースコードに固定** されます。「Mystery も読めるようにしたい」と要件が変われば、原則 **ソースを修正して再デプロイ** が必要でした。（role-template の attribute で *値* だけは実行時に差し替えられますが、条件の **構造** はコード側にあります。）
+- **CIS/AMS**: 絞り込み条件は **DCL ポリシー** として表現され、テナント管理者が **SCI Admin Console（IAS 管理コンソール）で実行時に派生ポリシーを作成** できます。アプリを再デプロイせずに、テナントごと・ユーザーごとの絞り込みを調整できます。
+
+例として、bookshop の「ジャンルで読める本を絞る」ポリシーを見ます。これは開発者の base policy `cap.Reader` から、**管理者が実行時に派生** させたポリシーです。
 
 ```dcl
+// 管理者が Admin Console で作成する実行時ポリシー（base policy から派生）
 POLICY JuniorReader {
     USE cap.Reader RESTRICT Genre IN ('Fairy Tale');
 }
 ```
 
-このポリシーを割り当てられたユーザーが本の一覧を取得すると、AMS は `Genre = 'Fairy Tale'` を **`where` 条件として注入** し、結果を行レベルで絞り込みます。
+このポリシーを割り当てられたユーザーが本の一覧を取得すると、AMS は `Genre = 'Fairy Tale'` を **`where` 条件として注入** し、結果を行レベルで絞り込みます。CAP プロジェクトでは、この変換（認可条件 → CQL/CXN 式）は **自動** です（非 CAP でも SQL 抽出器などで同じことができます）。
 
 ```mermaid
 flowchart LR
@@ -128,7 +159,7 @@ flowchart LR
     style R fill:#d5f9e0,stroke:#27ae60,color:#1a1a1a
 ```
 
-ポイントは、認可判定の結果が **「はい／いいえ」だけでなく「条件（フィルタ）」** になりうることです。アプリはその条件をデータ取得に反映し、**ユーザーが見てよい行だけ** を返します。XSUAA 時代に「認可のためのデータフィルタ」を毎回手で書いていた作業が、ポリシー側に寄せられます。
+ポイントは 2 つです。1 つは、認可判定の結果が **「はい／いいえ」だけでなく「条件（フィルタ）」** になりうること。もう 1 つは、その条件を **アプリのコードではなく実行時ポリシー（管理者）側に置ける** ことです。要件が変わるたびに `where` を書き換えて再デプロイする、という XSUAA 時代の負担がなくなります。
 
 > `WHERE` 条件で使う属性（例では `Genre`）は `schema.dcl` に宣言し、CAP では `@ams.attributes` で cds モデルの要素（`genre` 等）へマッピングします。詳細は公開ドキュメントの [Instance-Based Authorization](../docs/CAP/InstanceBasedAuthorization.md) を参照してください。
 
@@ -238,7 +269,7 @@ service ProductService {
 - 認可モデルが **静的 RBAC（scope／role）→ ポリシーベース（DCL）** へ。トークンの `scope` を読むコードは無くなる。
 - **DCL** は「アクション × リソース」を宣言し、`WHERE` で **属性条件（ABAC）** を表現できる。開発者の **base policy** と管理者の **実行時ポリシー（`USE ... RESTRICT`）** の分業。
 - CAP では **ロールベース**のまま。`ASSIGN ROLE`（＝ `$SCOPES` 上のアクション）でロールを割り当てる。
-- **インスタンスベース（行レベル）認可** 🔑 — `RESTRICT` の条件がフィルタとして返り、CAP では自動で `where`（CQL）へ変換される。XSUAA で自前実装が必要だった部分がポリシーに寄る。
+- **インスタンスベース（行レベル）認可** 🔑 — 行レベルの絞り込みは XSUAA でも `@restrict ... where` で可能だったが、条件は **コードに固定** され変更に再デプロイが必要だった。AMS は条件を **DCL ポリシー** で表現し、**管理者が Admin Console で実行時に** 調整できる。`RESTRICT` の条件はフィルタとして返り、CAP では自動で `where`（CQL）へ変換される。
 - 判定は **アプリ内のローカル PDP** が **Authorization Bundle**（AMS が中央コンパイル → mTLS で DL → 定期ポーリング）を評価して行う。外部呼び出しなしで速く、かつポリシー変更は再ログイン不要で反映される。
 
 ## 次に読む
