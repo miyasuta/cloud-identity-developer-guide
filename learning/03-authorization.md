@@ -289,6 +289,6 @@ service ProductService {
 
 ## 次に読む
 
-- **04. 設定成果物の違い** — `xs-security.json`（scopes / role-templates）から **`identity` ＋ `authorization.enabled` ＋ DCL ファイル群** へ
+- **[04. 設定成果物の違い](04-configuration-artifacts.md)** — `xs-security.json`（scopes / role-templates）から **`identity` ＋ `authorization.enabled` ＋ DCL ファイル群** へ
 
-*(04 以降は順次作成します)*
+*(05 以降は順次作成します)*

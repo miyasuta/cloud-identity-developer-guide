@@ -35,7 +35,7 @@ XSUAA が「認証委譲・トークン発行・認可（scope）」を **一手
 | 01 | [パラダイムシフト](01-overview-paradigm-shift.md) | 認証と認可の「分離」— 最重要コンセプト |
 | 02 | [認証の違い](02-authentication.md) | IAS = OIDC 発行者、mTLS / 証明書、トークン構造、App-to-App の認証方式（フローと `ias_apis`） |
 | 03 | [認可の違い](03-authorization.md) | scope/RBAC → DCL ポリシー・実行時 PDP・インスタンスベース認可 |
-| 04 | 設定成果物の違い *(作成予定)* | `xs-security.json` → `identity` + `authorization.enabled` + DCL |
+| 04 | [設定成果物の違い](04-configuration-artifacts.md) | `xs-security.json` → `identity` + `authorization.enabled` + DCL |
 | 05 | ロール割当・管理の違い *(作成予定)* | BTP コックピット → IAS 管理コンソール／ポリシー割当 |
 | 06 | ライブラリ・実装の違い *(作成予定)* | `@sap/xssec` scope 判定 → AMS クライアントライブラリ、CAP 連携 |
 | 07 | まとめ・移行チートシート *(作成予定)* | XSUAA → CIS 概念対応表・移行観点 |
