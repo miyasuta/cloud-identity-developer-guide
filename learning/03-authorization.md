@@ -177,6 +177,8 @@ flowchart LR
 ポイントは 2 つです。1 つは、認可判定の結果が **「はい／いいえ」だけでなく「条件（フィルタ）」** になりうること。もう 1 つは、その条件を **アプリのコードではなく実行時ポリシー（管理者）側に置ける** ことです。要件が変わるたびに `where` を書き換えて再デプロイする、という XSUAA 時代の負担がなくなります。
 
 > `WHERE` 条件で使う属性（例では `Genre`）は `schema.dcl` に宣言し、CAP では `@ams.attributes` で cds モデルの要素（`genre` 等）へマッピングします。詳細は公開ドキュメントの [Instance-Based Authorization](../docs/CAP/InstanceBasedAuthorization.md) を参照してください。
+>
+> ここで見た `Genre` は「**リソース側の属性**」で、管理者が `RESTRICT Genre = 'Fairy Tale'` のように **定数で絞る** 例でした。これに対し、絞り込みの値を **ユーザー本人のプロファイル属性**（`$user.division` など）から取り、**単一ポリシーでユーザーごとに自動的に絞る**（ロール爆発を避ける）パターンは、補足の [ユーザー属性による動的な認可](dynamic-authorization-user-attributes.md) で扱います。
 
 ---
 
