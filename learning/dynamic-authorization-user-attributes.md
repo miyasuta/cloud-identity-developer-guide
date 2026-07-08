@@ -238,3 +238,4 @@ HR が Identity 側の属性を直せば、**IPS（Identity Provisioning）** �
 - [@sap/ams（公開 docs）](../docs/Libraries/nodejs/sap_ams/sap_ams.md) — `IdentityServiceAuthProvider` / AttributeInput / Custom XssecAuthProvider
 - [CAP: CAP Users（cap.cloud.sap）](https://cap.cloud.sap/docs/guides/security/cap-users) — `$user.<attr>` / `@ams.attributes` / base policy
 - サンプル: [ams-samples-node](https://github.com/SAP-samples/ams-samples-node)
+- 出典ブログ: [Dynamic authorisation with user attributes in SAP CAP and AMS（SAP Community）](https://community.sap.com/t5/technology-blog-posts-by-sap/dynamic-authorisation-with-user-attributes-in-sap-cap-and-ams/ba-p/14388853) — 本ページの元にした記事
