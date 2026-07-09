@@ -3,6 +3,8 @@
 > **この章の要点**
 > XSUAA では、`xs-security.json` の role-template を土台に、管理者が **BTP コックピット** で「ロールコレクション」を組み立て、ユーザーまたは IdP グループに割り当てていました。CIS では、この「割当という行為」自体が **IAS 管理コンソール** に移り、割り当てる対象も「ロールコレクション」ではなく **認可ポリシー**（DCL の base policy／管理者が派生する custom policy、[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)参照）そのものになります。割当の単位は基本 **ユーザー単位**で、BTP のような「グループへの一括マッピング」は現行の手順にはありません。
 >
+> **正直に言うと、これは AMS 側の制約でもあります。** ロールコレクションは複数アプリの role-template を横断して束ねられましたが、AMS の認可ポリシーは基本 **そのアプリ（`identity` インスタンス）に閉じ**、複数アプリのポリシーを一つの割当単位にまとめる標準機能はありません。同じ効果を得るには [共有 IAS アプリと集中 DCL](shared-ias-app-central-dcl.md) のように **アプリ構成そのものを変える**必要があり、これは AMS が標準で持つ機能というより **ロールコレクション相当のものを再現するための回避策**です。
+>
 > 前章（[04](04-configuration-artifacts.md)）で「認可の設定ファイルがどう変わったか」を見ました。本章は「その設定を、誰が・どこで・誰に割り当てるか」という **運用面**にフォーカスします。
 
 ---
@@ -16,8 +18,9 @@
 | 割当先の単位 | ユーザー **または** IdP グループへの一括マッピング（Map Role Collections to User Groups） | **ユーザー単位**（ポリシーの Assignments ペインで Add → ユーザーを選択）。グループへの直接割当は現行の手順にはない |
 | 「器」を作るのは誰か | 開発者が `xs-security.json` で role-template を定義 → 管理者が BTP コックピットでロールコレクションに組み合わせる | 開発者が DCL で base policy を定義 → 管理者はそのまま割り当てるか、Admin Console で `USE ... RESTRICT` して custom policy を派生 |
 | 反映されるタイミング | 次回ログイン時、新しい JWT（scope 入り）が発行される | 実行時、AMS が配布する **Authorization Bundle** に反映（[03 章](03-authorization.md#4-判定はどこでいつ起きるか--実行時-pdp-と-authorization-bundle)）。JWT には現れない |
+| 複数アプリのポリシーを束ねる | ロールコレクションは **複数アプリの role-template を横断して束ねられる**（標準機能） | 認可ポリシーは基本 **1 つのアプリ（`identity` インスタンス）に閉じる**。束ねるには[共有 IAS アプリ＋集中 DCL](shared-ias-app-central-dcl.md)という **構成上の回避策**が必要（標準機能ではない） |
 
-ポイントは、**「複数の権限をまとめる中間の器（ロールコレクション）を管理者が組み立てる」から「開発者が定義したポリシーを（必要なら絞り込んで）そのまま割り当てる」へ**、一段シンプルになったことです。ただし、その分「グループへ一括で割り当てる」という BTP の便利機能は、AMS のポリシー割当には（現行手順上は）ありません。
+ポイントは、**「複数の権限をまとめる中間の器（ロールコレクション）を管理者が組み立てる」から「開発者が定義したポリシーを（必要なら絞り込んで）そのまま割り当てる」へ**、一段シンプルになったことです。ただし、これは単純な簡素化ではなく **できなくなったこともある** という点に注意が必要です。「グループへ一括で割り当てる」という BTP の便利機能は AMS のポリシー割当には（現行手順上は）なく、「複数アプリの権限を1つの器にまとめる」という BTP では標準機能だったことも、AMS では構成上の回避策（共有 IAS アプリ）に頼る必要があります。
 
 ---
 
@@ -39,7 +42,9 @@
 
 （手順は [Assign Authorization Policies](https://help.sap.com/docs/IDENTITY_AUTHENTICATION/6d6d63354d1242d185ab4830fc04feb1/eac8e5e5db394e9ba409e68c66eedb77.html) より。CAP アプリでも同じ管理コンソールを使います — [CAP: Assign Policies in the Administrative Console](https://cap.cloud.sap/docs/node.js/authentication#assign-policies-in-the-administrative-console)）
 
-base policy をそのまま割り当てることも、管理者が **Admin Console 上で `USE ... RESTRICT` して custom policy を作り**（[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)）、それを割り当てることもできます。「顧客ごとに絞り込んだポリシーを、顧客の管理者自身が作って運用できる」のは、XSUAA の role-template（attribute の値だけ差し替え可能）にはなかった自由度です。
+base policy をそのまま割り当てることも、管理者が **Admin Console 上で `USE ... RESTRICT` して custom policy を作り**（[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)）、それを割り当てることもできます。
+
+> **ただし、これを無条件の「自由度」として評価するのは誤りです。** 本番の Admin Console でいきなりポリシーを手作りする運用は、変更管理・監査・DCL の後方互換性（[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)の Forbidden Changes）の観点から通常は推奨されません。実運用の本流は、あくまで **開発環境で DCL をコードとして書き、deployer で移送する**（base policy として）ことです。Admin Console での custom policy 作成は、テナント固有の細かい調整や緊急対応のための**逃げ道**であって、「顧客管理者にポリシー作成を任せてよい」という設計思想ではありません。移送を前提にするなら、絞り込みの条件も **コードとして DCL に書き、deployer で流す**方を優先すべきです。
 
 ---
 
@@ -75,7 +80,11 @@ CIS を構成する 3 サービス（[README](README.md#cis-を構成する-3-�
 - **「誰が何をしてよいか」の割当**（本章 §2）と
 - **「どのアプリが何を消費してよいか」の割当**
 
-の両方が、同じ **IAS 管理コンソール**（アプリの Trust/dependency 設定と Authorization Policies 設定）に集約されているのが CIS の特徴です。App-to-App の dependency 登録・Destination 設定の具体手順は [App-to-App 連携の設定と証明書運用](app2app-and-certificate-operations.md) にまとめています。
+の両方が、同じ **IAS 管理コンソール**（アプリの Trust/dependency 設定と Authorization Policies 設定）に集約されているのが CIS の特徴です。
+
+> **ただし、これは純粋な追加コストでもあります。** XSUAA では技術通信・主体伝播の認可は基本 scope 判定の延長で済んでいましたが、CIS では App-to-App のたびに **dependency 登録・`INTERNAL POLICY` の用意・API 権限グループ→ポリシーのマッピング関数実装**という複数ステップが新たに必要になります。「アプリ間の権限がより明示的になった」という利点はある一方で、**開発・運用の手間が単純に増える**というトレードオフも正直に見ておくべきです。
+
+App-to-App の dependency 登録・Destination 設定の具体手順は [App-to-App 連携の設定と証明書運用](app2app-and-certificate-operations.md) にまとめています。
 
 ---
 
@@ -126,8 +135,10 @@ XSUAA 側は「ロールコレクションという器を作り、ユーザー�
 - 割当の器が **ロールコレクション → 認可ポリシー（base policy／custom policy）**に変わり、開発者の定義をそのまま、または管理者が絞り込んで割り当てる。
 - 割当作業の場所が **BTP コックピット → IAS 管理コンソール**（Applications & Resources → Applications → 対象アプリ → Authorization Policies タブ → Assignments）に移る。
 - 割当の単位は基本 **ユーザー単位**。BTP の「ロールコレクション ⇄ IdP グループ」マッピングに相当する、グループへの一括割当は現行の手順にはない。
+- **複数アプリのポリシーを束ねる標準機能もない。** ロールコレクションは複数アプリの role-template を横断して束ねられたが、AMS の認可ポリシーはアプリ（`identity` インスタンス）単位に閉じる。束ねたい場合は[共有 IAS アプリ＋集中 DCL](shared-ias-app-central-dcl.md)という構成上の回避策が必要——これが XSUAA → CIS で一番の運用上の課題になり得る。
+- **Admin Console での custom policy 作成を無条件の利点と見ない。** 本流はあくまで開発環境で DCL をコードとして書き、deployer で移送すること。管理者による直接作成はテナント固有の調整・緊急対応の逃げ道であり、変更管理や DCL の後方互換性の観点から本番での多用は推奨されない。
 - **IPS（Identity Provisioning）**は「誰が存在し、どのグループに属するか」を同期するレイヤーで、「何をしてよいか」を決める AMS の認可ポリシー割当とは明確に別。
-- **App-to-App** も同じ IAS 管理コンソールで管理され、「どのアプリがどの API 権限グループを消費できるか」は **SCI テナント管理者**が決める（`ias_apis`）。
+- **App-to-App** も同じ IAS 管理コンソールで管理され、「どのアプリがどの API 権限グループを消費できるか」は **SCI テナント管理者**が決める（`ias_apis`）。ただしこれは XSUAA になかった **追加の設定コスト**（dependency 登録・`INTERNAL POLICY`・マッピング関数実装）でもある。
 - 反映タイミングも異なる：XSUAA は次回ログインで新しい JWT、CIS は実行時に配布される Authorization Bundle。
 
 ## 次に読む
