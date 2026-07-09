@@ -1,11 +1,11 @@
 # 05. ロール割当・管理の違い — BTP コックピットから IAS 管理コンソールへ
 
 > **この章の要点**
-> XSUAA では、`xs-security.json` の role-template を土台に、管理者が **BTP コックピット** で「ロールコレクション」を組み立て、ユーザーまたは IdP グループに割り当てていました。CIS では、この「割当という行為」自体が **IAS 管理コンソール** に移り、割り当てる対象も「ロールコレクション」ではなく **認可ポリシー**（DCL の base policy／管理者が派生する custom policy、[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)参照）そのものになります。**認可ポリシーを作成すると、同じ名前の「ユーザーグループ」が自動的に作られ**、そのグループにユーザーを追加することが割当そのものになります（§3）。手動での個別追加に加え、**IPS のプロビジョニング機能でソース属性を条件にこのグループへ自動割当**することもできます（§4）。
+> XSUAA では、管理者が **BTP コックピット**で「ロールコレクション」（複数アプリの role-template をまとめた器）を組み立て、ユーザーや IdP グループに割り当てていました。CIS では、この割当が **IAS 管理コンソール**に移り、割り当てる対象も **認可ポリシー**（[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)の base policy／custom policy）そのものになります。ポイントは、**認可ポリシーを作ると同名の「ユーザーグループ」が自動生成され、そのグループにユーザーを追加することが割当そのもの**になることです（§3）。手動追加のほか、**IPS のプロビジョニングで属性条件による自動割当**もできます（§4）。
 >
-> **正直に言うと、これは AMS 側の制約でもあります。** ロールコレクションは複数アプリの role-template を「1つの名前」として束ねられましたが、AMS にはそれに相当する**再利用可能な名前付きバンドル**はありません。ただし「束ねて見る・割り当てる場所」自体が無いわけではありません——SAP の公式リファレンスアーキテクチャは **Identity Directory を認可割当の中央集約ポイント**と位置づけており（§3 末尾で詳述）、そこでは 1 ユーザーに対して複数アプリのグループ（＝ポリシー）をまとめて確認・割当できます。「1つの名前で複数アプリ分を一括付与する」体験は無くても、「1つの画面/API で複数アプリ分を横断的に扱う」体験はある、という区別が重要です。
+> 一点、正直な制約があります。ロールコレクションは複数アプリの権限を「1つの名前」に束ねられましたが、**AMS にそれに相当する再利用可能な名前付きバンドルはありません**。ただし「横断的に扱う場所」自体が無いわけではなく、**Identity Directory が全アプリの割当を集約する中央ハブ**として機能します（§3 末尾）。
 >
-> 前章（[04](04-configuration-artifacts.md)）で「認可の設定ファイルがどう変わったか」を見ました。本章は「その設定を、誰が・どこで・誰に割り当てるか」という **運用面**にフォーカスします。
+> 前章（[04](04-configuration-artifacts.md)）では「認可の設定ファイルがどう変わったか」を見ました。本章は「その設定を、誰が・どこで・誰に割り当てるか」という**運用面**にフォーカスします。
 
 ---
 
@@ -13,14 +13,14 @@
 
 | 観点 | XSUAA / BTP | CIS / IAS |
 |---|---|---|
-| 割当の器 | **ロールコレクション**（複数 role-template をまとめた入れ物） | **認可ポリシー**（base policy、または管理者が派生した custom policy）そのものを直接割当 |
+| 割当の器 | **ロールコレクション**（複数 role-template をまとめた入れ物） | **認可ポリシー**（base policy／custom policy）を直接割当 |
 | 割当場所 | BTP コックピット（サブアカウント → Security → Role Collections） | IAS 管理コンソール（Applications & Resources → Applications → 対象アプリ → **Authorization Policies** タブ） |
-| 割当先の単位 | ユーザー **または** IdP グループへの一括マッピング（Map Role Collections to User Groups） | ユーザー、**または**（実体としては）**ポリシーと同名で自動生成されるグループ**への追加。IPS の属性条件付きプロビジョニングで一括・自動割当も可能（§3・§4） |
-| 「器」を作るのは誰か | 開発者が `xs-security.json` で role-template を定義 → 管理者が BTP コックピットでロールコレクションに組み合わせる | 開発者が DCL で base policy を定義 → 管理者はそのまま割り当てるか、Admin Console で `USE ... RESTRICT` して custom policy を派生 |
-| 反映されるタイミング | 次回ログイン時、新しい JWT（scope 入り）が発行される | 実行時、AMS が配布する **Authorization Bundle** に反映（[03 章](03-authorization.md#4-判定はどこでいつ起きるか--実行時-pdp-と-authorization-bundle)）。JWT には現れない |
-| 複数アプリのポリシーを束ねる | ロールコレクションが **複数アプリの role-template を「1つの名前」として束ねられる**（再利用可能な名前付きバンドル、標準機能） | **名前付きバンドルは無い**が、**Identity Directory が全アプリの割当を横断的に扱う中央集約ポイント**として機能する（"user view" で1ユーザーに複数グループをまとめて割当、または標準 SCIM2 API 経由。§3 参照）。ポリシーそのものをアプリ横断でまとめたい場合は[共有 IAS アプリ＋集中 DCL](shared-ias-app-central-dcl.md)が必要 |
+| 割当先の単位 | ユーザー、または IdP グループへの一括マッピング | ユーザー、または**ポリシーと同名で自動生成されるグループ**への追加。IPS で属性条件付きの自動割当も可能（§3・§4） |
+| 「器」を作るのは誰か | 開発者が role-template を定義 → 管理者がロールコレクションに組み合わせる | 開発者が DCL で base policy を定義 → 管理者はそのまま割り当てるか、Admin Console で `USE ... RESTRICT` して custom policy を派生 |
+| 反映タイミング | 次回ログイン時、新しい JWT（scope 入り）が発行される | 実行時、AMS が配布する **Authorization Bundle** に反映（[03 章](03-authorization.md#4-判定はどこでいつ起きるか--実行時-pdp-と-authorization-bundle)）。JWT には現れない |
+| 複数アプリの権限を束ねる | ロールコレクションが複数アプリの権限を「1つの名前」に束ねる（再利用可能な名前付きバンドル） | **名前付きバンドルは無い**が、**Identity Directory が全アプリの割当を横断的に扱う中央ハブ**として機能する（§3）。ポリシー自体をアプリ横断でまとめたい場合は[共有 IAS アプリ＋集中 DCL](shared-ias-app-central-dcl.md) |
 
-ポイントは、**「複数の権限をまとめる中間の器（ロールコレクション）を管理者が組み立てる」から「開発者が定義したポリシーを（必要なら絞り込んで）そのまま割り当てる」へ**、一段シンプルになったことです。ただし、これは単純な簡素化ではなく、一部は形を変えて残っています。「グループへ一括で割り当てる」という BTP の発想は、AMS では「**ポリシーごとに自動生成されるグループ**にユーザーを追加する」という形で実現されており（§3）、IPS と組み合わせると属性条件による自動割当まで可能です。「複数アプリの権限を横断して扱う」という点も、**Identity Directory という単一のハブに全アプリの割当が集約される**ことで、見た目ほど失われてはいません（§3）。本当に無くなったのは、「1つの名前を割り当てるだけで複数アプリ分が自動展開される」という**再利用可能なバンドル・オブジェクト**だけです。
+大きな流れは、**「管理者が中間の器を組み立てる」から「開発者が定義したポリシーを（必要なら絞り込んで）そのまま割り当てる」へ**一段シンプルになったことです。ただし「グループへ一括割当」「複数アプリを横断して扱う」という発想が消えたわけではありません。前者は「ポリシー＝自動生成グループにユーザーを追加する」形で（§3）、後者は「**Identity Directory という単一ハブに全アプリの割当が集約される**」形で（§3 末尾）残っています。本当に無くなったのは、**1つの名前を割り当てるだけで複数アプリ分が自動展開される再利用可能なバンドル・オブジェクト**だけです。
 
 ---
 
@@ -30,82 +30,65 @@
 
 1. 開発者が `xs-security.json` に role-template を定義。
 2. 管理者が BTP コックピットの **Security → Role Collections** でロールコレクションを作成し、role-template を追加。
-3. ロールコレクションを **ユーザーに直接割当**、または **IdP グループにマッピング**（[Map Role Collections to User Groups](https://help.sap.com/docs/BTP/65de2977205c403bbc107264b8eccf4b/51acfc82c0c54db59de0a528f343902c.html)）。後者を使うと、グループのメンバー管理は IdP 側に任せられ、BTP 側でのマッピング設定は最初の 1 回だけで済みます。
+3. ロールコレクションを**ユーザーに直接割当**、または **IdP グループにマッピング**（[Map Role Collections to User Groups](https://help.sap.com/docs/BTP/65de2977205c403bbc107264b8eccf4b/51acfc82c0c54db59de0a528f343902c.html)）。後者ならメンバー管理は IdP 側に任せられ、BTP 側の設定は最初の1回だけで済む。
 
 ### CIS / IAS
 
 1. 開発者が DCL で base policy を定義し、**AMS Policies Deployer App**（[04 章](04-configuration-artifacts.md#4-ビルドデプロイの成果物--cds-add-ams-が生成するもの)）で AMS へアップロード。
-2. 管理者が **IAS 管理コンソール**にサインインし、**Applications & Resources → Applications** から対象アプリを選択。
-3. アプリ詳細ページの **Authorization Policies** タブを開く。
-4. 割り当てたいポリシーを選択すると **Assignments ペイン**が開く。
-5. **Add** を選び、割り当てたい**ユーザーを選択**して Add。
+2. 管理者が **IAS 管理コンソール**で **Applications & Resources → Applications** から対象アプリを選択。
+3. **Authorization Policies** タブを開き、割り当てたいポリシーを選択すると **Assignments ペイン**が開く。
+4. **Add** から割り当てたいユーザーを選んで追加。
 
-（手順は [Assign Authorization Policies](https://help.sap.com/docs/IDENTITY_AUTHENTICATION/6d6d63354d1242d185ab4830fc04feb1/eac8e5e5db394e9ba409e68c66eedb77.html) より。CAP アプリでも同じ管理コンソールを使います — [CAP: Assign Policies in the Administrative Console](https://cap.cloud.sap/docs/node.js/authentication#assign-policies-in-the-administrative-console)）
+この Assignments ペインでの Add は、実体としては**ポリシーと同名で自動生成されたグループへの追加**です（§3）。`Users & Authorizations → User Groups` からポリシー名のグループを直接開いても同じ結果になります。
 
-> **裏側の実体はグループです**: ポリシーを作成すると、**そのポリシーと同じ名前のユーザーグループが自動生成**されます。上記の Assignments ペインでの Add はこのグループへの追加と同じ操作で、`Users & Authorizations → User Groups` からポリシー名のグループを探して直接ユーザーを追加することでも同じ結果になります（詳細は §3）。
+base policy をそのまま割り当てるほか、管理者が **Admin Console 上で `USE ... RESTRICT` して custom policy を派生**（[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)）させて割り当てることもできます。ただし本流はあくまで**開発環境で DCL をコードとして書き、deployer で移送する**ことです。本番の Admin Console で直接ポリシーを手作りするのは、変更管理・監査・DCL の後方互換性（[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)の Forbidden Changes）の観点から、テナント固有の調整や緊急対応の**逃げ道**であって、常用する設計思想ではありません。
 
-base policy をそのまま割り当てることも、管理者が **Admin Console 上で `USE ... RESTRICT` して custom policy を作り**（[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)）、それを割り当てることもできます。
-
-> **ただし、これを無条件の「自由度」として評価するのは誤りです。** 本番の Admin Console でいきなりポリシーを手作りする運用は、変更管理・監査・DCL の後方互換性（[03 章](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)の Forbidden Changes）の観点から通常は推奨されません。実運用の本流は、あくまで **開発環境で DCL をコードとして書き、deployer で移送する**（base policy として）ことです。Admin Console での custom policy 作成は、テナント固有の細かい調整や緊急対応のための**逃げ道**であって、「顧客管理者にポリシー作成を任せてよい」という設計思想ではありません。移送を前提にするなら、絞り込みの条件も **コードとして DCL に書き、deployer で流す**方を優先すべきです。
+（手順は [Assign Authorization Policies](https://help.sap.com/docs/IDENTITY_AUTHENTICATION/6d6d63354d1242d185ab4830fc04feb1/eac8e5e5db394e9ba409e68c66eedb77.html)。CAP アプリでも同じ管理コンソールを使います — [CAP: Assign Policies in the Administrative Console](https://cap.cloud.sap/docs/node.js/authentication#assign-policies-in-the-administrative-console)）
 
 ---
 
 ## 3. グループの役割の違い 🔑
 
-BTP は「ロールコレクション ⇄ IdP グループ」のマッピングを一級市民の機能として持ち、グループ単位の一括割当が前提の設計です。IAS も、実は同じ発想を **別の実装**で持っています。
+**認可ポリシーを作成すると、そのポリシーと同名の「ユーザーグループ」が自動的に作られます**（SAP Help: *"When you create a new authorization policy, a new user group is automatically created with the same name you specified for the authorization policy."*）。つまり——
 
-**認可ポリシーを作成すると、そのポリシーと同じ名前の「ユーザーグループ」が自動的に作成されます**（SAP Help: *"When you create a new authorization policy, a new user group is automatically created with the same name you specified for the authorization policy."*）。つまり——
-
-- ポリシーへの割当は、実体としては **`Users & Authorizations → User Groups` にある、ポリシーと同名のグループへの追加**である。
+- ポリシーへの割当は、実体としては **`Users & Authorizations → User Groups` にある同名グループへの追加**である。
 - §2 の「Assignments ペインで Add」は、このグループを操作する専用 UI にすぎない。
-- 管理者は **`Combine Authorization Policies`** で、同一アプリ内の複数ポリシーを1つの新しいポリシー（＝1つの新しいグループ）に合成することもできる（[Combine Authorization Policies](https://help.sap.com/docs/IDENTITY_AUTHENTICATION/6d6d63354d1242d185ab4830fc04feb1/1a69414b93ed44f8917fae5d6d6a430d.html)。ただし対象は同一アプリのポリシーに限られ、§1 で見た「アプリを跨いだ束ね」の代替にはならない）。
+- 管理者は **`Combine Authorization Policies`** で同一アプリ内の複数ポリシーを1つに合成できる（[Combine Authorization Policies](https://help.sap.com/docs/IDENTITY_AUTHENTICATION/6d6d63354d1242d185ab4830fc04feb1/1a69414b93ed44f8917fae5d6d6a430d.html)。ただし対象は同一アプリ内に限られ、アプリを跨いだ束ねの代替にはならない）。
 
-つまり **グループはむしろ AMS の割当の中核**であり、BTP のロールコレクション ⇄ グループマッピングに近い発想が、CIS では「ポリシー＝グループ」という形で実装されています。IAS 管理コンソールでの手動割当に加えて、**IPS のプロビジョニングでこのグループへ自動的にユーザーを追加する**こともできます（§4）——これは BTP の「IdP グループをロールコレクションにマッピングし、メンバー管理を IdP に任せる」やり方よりも、実は一歩進んだ仕組みです。属性条件（例: `department = 'Finance'`）で **動的に**振り分けられるためです。
+グループはむしろ AMS の割当の**中核**であり、BTP の「ロールコレクション ⇄ IdP グループ」に近い発想が「ポリシー＝グループ」という形で実装されています。手動割当に加えて **IPS で属性条件による自動割当**（§4）もできる点は、BTP のグループマッピングより一歩進んだ仕組みです。
 
 ### 複数アプリを横断する割当先 — Identity Directory が中央ハブ
 
-§1 で「複数アプリのポリシーを束ねる標準機能はない」と書きましたが、これは半分だけ正確です。**名前付きの再利用可能なバンドル**（ロールコレクション相当）は無くても、**複数アプリの権限を横断して見て・割り当てる中央の場所**は標準で用意されています。
+前述の通り**名前付きの再利用可能なバンドル**（ロールコレクション相当）はありませんが、**複数アプリの権限を横断して見て・割り当てる中央の場所**は標準で用意されています。SAP の公式リファレンスアーキテクチャ（[Authorization with SAP Cloud Identity Services](https://architecture.learning.sap.com/docs/ref-arch/20c6b29b1e/3)）は、**Identity Directory を認可割当の中央集約ポイント**と位置づけています（*"Identity Directory is the central point for the authorization assignments."*）。
 
-SAP の公式リファレンスアーキテクチャ（[SAP Architecture Center: Authorization with SAP Cloud Identity Services](https://architecture.learning.sap.com/docs/ref-arch/20c6b29b1e/3)）によると——
+- **AMS のポリシー**は自動でグループとして Identity Directory に公開される。
+- **XSUAA のロールコレクション**も、IPS を設定すれば Identity Directory にグループとして複製できる。
+- 他の SAP SaaS のロールも SCIM2 経由で同じ場所にグループとして並ぶ。
+- UI には **user view**（1ユーザーに複数アプリのグループをまとめて割当）と **groups view** があり、標準 **SCIM2 API**（`/Groups`）でも同じ操作ができる。
 
-- **Identity Directory が認可割当の中央集約ポイント**として設計されている（*"Identity Directory is the central point for the authorization assignments."*）。
-- **AMS のポリシー**は自動でグループとして Identity Directory に公開される（§3 冒頭の話）。
-- **XSUAA のロールコレクションも、IPS を設定すれば Identity Directory にグループとして複製できる**（*"SAP BTP applications based on XS UAA should be configured with IPS to replicate Role Collections into the Identity Directory as groups."*）。
-- 他の SAP SaaS（例: SAP S/4HANA Cloud）のロールも SCIM2 経由で同じ場所にグループとして並ぶ。
-- Identity Directory の UI には **2つの見え方**がある: **user view**（1人のユーザーに対して、複数のグループ＝複数アプリの権限をまとめて割当）と **groups view**（1つのグループに対してユーザーを割当）。標準の **SCIM2 API**（`/Groups` エンドポイントの `members` 属性）でも同じ操作ができる。
+つまり AMS・XSUAA（IPS 経由）・他 SAP SaaS の権限が、**すべて同じ Identity Directory の「グループ」として並び、1つのユーザーページから横断的に割り当てられます**——XSUAA 単体の BTP コックピットにはなかった統合です。ただし繰り返しになりますが、「Sales Manager」のような業務ロールを**1つの名前で表し、それを割り当てるだけで背後の複数グループが自動展開される**バンドル・オブジェクトは存在しません。「どのグループの組を割り当てるか」は、管理者または HR/IGA 側の命名規則・プロビジョニング設定として運用管理する必要があります。
 
-つまり、AMS・XSUAA（IPS経由）・他の SAP SaaS の権限が、**すべて同じ Identity Directory の「グループ」という単位で並び、1つのユーザーページから横断的に確認・割当できる**——これは XSUAA 単体の BTP コックピットにはなかった、CIS ならではの統合です。ただし、「Sales Manager」のような業務ロールを**1つの名前で表現し、それを割り当てるだけで背後の複数グループが自動展開される**——という**再利用可能なバンドル・オブジェクト**は、この仕組みの中には存在しません。管理者（または HR/IGA 側のプロビジョニング）が「どのグループの組を割り当てればよいか」を運用上の取り決め・命名規則として管理する必要があります。
-
-> **標準 SCIM2 API である点が重要です。** 独自の割当ロジックを持つカスタムアプリをゼロから作らなくても、Identity Directory の SCIM2 `/Groups` API は業界標準プロトコルであり、多くの HR/IGA（SAP Cloud Identity Access Governance、SailPoint、Saviynt 等）/プロビジョニングツールが標準で話せます。「複数アプリの権限を1回の操作でまとめて割り当てたい」という要求は、**カスタム開発ではなく、既存の SCIM2 対応ツールの設定**で満たせる可能性が高いということです。次節（§4）の IPS 属性条件マッピングとは別の、より運用しやすい道になり得ます。
+この横断的な割当は **Identity Directory の標準 SCIM2 `/Groups` API** 経由でも行えます。これは業界標準プロトコルで、多くの HR/IGA（SAP Cloud Identity Access Governance、SailPoint、Saviynt 等）が標準で話せます。つまり「複数アプリの権限をまとめて割り当てたい」という要求は、**カスタムアプリを自作せず、既存の SCIM2 対応ツールの設定**で満たせる可能性が高い、ということです。
 
 ---
 
 ## 4. IPS（Identity Provisioning）の位置づけ — ポリシー割当も自動化できる
 
-CIS を構成する 3 サービス（[README](README.md#cis-を構成する-3-つのサービス)）のうち、**IPS（Identity Provisioning）** は「誰が存在し、どのグループに属するか」を人事システムや他の IdP と同期する役割です。ユーザー・グループのデータそのものは **Identity Directory**（CIS の永続化レイヤー）に格納され、IPS はそこへの同期パイプラインを担います（SCIM ベース、フル/デルタ実行可能）。
+CIS を構成する3サービス（[README](README.md#cis-を構成する-3-つのサービス)）のうち、**IPS** は「誰が存在し、どのグループに属するか」を人事システムや他の IdP と同期する役割です。ユーザー・グループのデータは **Identity Directory**（CIS の永続化レイヤー）に格納され、IPS がそこへの同期パイプライン（SCIM ベース、フル/デルタ実行可能）を担います。
 
-§3 で見た通り、認可ポリシーの実体はグループです。したがって——
+§3 の通り認可ポリシーの実体はグループなので、**IPS はポリシー割当も自動化できます**。ターゲットシステムの transformation に **`assignGroup`**（または `unassignGroup`）変数のマッピングを追加し、`condition` にソース属性のフィルタ式を書けば、ユーザー属性に応じて割り当てるポリシーを自動で振り分けられます（[Enabling Group Assignment](https://help.sap.com/docs/IDENTITY_AUTHENTICATION/6d6d63354d1242d185ab4830fc04feb1/0d80033336474468bb64ef8aeb7e3dd8.html)）:
 
-- **IPS が同期するもの**: ユーザーアカウント、**グループメンバーシップ**（＝ポリシー割当を含む）、属性値（`$user.department` など、[ユーザー属性による動的な認可](dynamic-authorization-user-attributes.md)の ABAC で使うもの）。
-- **IPS はポリシー割当も自動化できる**: ターゲットシステムの transformation に **`assignGroup`**（または `unassignGroup`）という変数を使ったマッピングを追加するだけで、標準／リアルタイムプロビジョニングの一部としてグループ（＝ポリシー）割当が行われます（[Enabling Group Assignment](https://help.sap.com/docs/IDENTITY_AUTHENTICATION/6d6d63354d1242d185ab4830fc04feb1/0d80033336474468bb64ef8aeb7e3dd8.html)）。しかも、このマッピングは **`condition` にソース属性のフィルタ式**を指定できるため、**ソースシステムのユーザー属性に応じて割り当てるポリシーを自動で振り分けられます**:
+```json
+{
+  "condition": "($.department EQUALS 'Finance')",
+  "constant": [{ "id": "<ポリシー用グループのID>" }],
+  "targetVariable": "assignGroup"
+}
+```
 
-  ```json
-  {
-    "condition": "($.department EQUALS 'Finance')",
-    "constant": [{ "id": "<ポリシー用グループのID>" }],
-    "targetVariable": "assignGroup"
-  }
-  ```
+BTP の「IdP グループをロールコレクションにマッピングし、メンバー管理を IdP に任せる」方式と同じ自動化のゴールを、CIS では IPS の属性条件マッピングで達成できます。
 
-  SAP 自身がこれを *"Group Assignments Based on User Attributes"* として、条件付き認証などと並ぶ活用例で紹介しています。BTP の「IdP グループをロールコレクションにマッピングし、メンバー管理を IdP に任せる」方式と同じ**自動化のゴール**を、CIS では **IPS の属性条件マッピング**で（理論上はより柔軟な形で）達成できます。
-
-> **ただし、これが現実的なのはポリシー数が少ないうちだけです。** `Enabling Group Assignment` の仕様上、**同じユーザーが複数の `condition` にマッチした場合、最後にマッチした条件だけが適用されます**（*"only the last matching condition is applied"*）。つまり、ポリシーごとに独立した条件を単純に並べても意図通りには動かず、**相互排他になるよう条件を注意深く整理・順序管理**する必要があります。ポリシーの数が増えるほど、この transformation 自体が複雑になり、組織変更（部署再編・新ポリシー追加）のたびに書き換えが必要になります——これは通常のアプリコードのようにテスト・レビュー・バージョン管理がしやすい場所ではありません。
->
-> 現実的に機能するのは、**セントラル DCL 側で職位単位くらいの粗いポリシー**（例: Manager／Staff／Auditor）だけを用意し、少数の条件分岐に収まる場合です。この粒度なら、§3 で見た **Identity Directory の SCIM2 API を話せる既存の HR/IGA ツール**（自前で作る必要はない）が現実的な選択肢になります。ポリシーがそれより細かい（＝ [03 章](03-authorization.md#3-インスタンスベース行レベル認可-)で見た ABAC の理想形に近づく）場合は、IPS の transformation に業務ロジックを直接書き込むよりも、その HR/IGA ツール側でマッピングルールを管理する方が現実的です——いずれにせよ、IPS の `condition` に複雑な業務ロジックを直接書き込むのは避け、IPS 自体は「ユーザー・属性の同期基盤」に徹するのが無難です。
-
-> 「誰が存在するか」（Identity Directory）と「その人が何をしてよいか」（認可ポリシー＝グループ）は依然として別の概念ですが、**両者は同じグループという器で交差**しており、単純なケースでは IPS のプロビジョニング設定だけで両方を横断的に自動化できる、という点は XSUAA 時代にはなかった統合です（ただし上記の通り、規模が大きくなるとこの単純さは長続きしません）。
-
-> XSUAA 時代、BTP はユーザーストア自体を持たず IdP に委譲していたのに対し、CIS では **Identity Directory が標準のユーザーストア**として組み込まれ、IPS がその同期経路になる——という位置づけの違いもあります（詳細は [What Are Cloud Identity Services?](https://help.sap.com/docs/IDENTITY_AUTHENTICATION/6d6d63354d1242d185ab4830fc04feb1/27882717f44b445fa287936c6f43dc1f.html)）。
+> **ただし、これが現実的なのはポリシー数が少ないうちだけです。** 仕様上、**同じユーザーが複数の `condition` にマッチした場合、最後にマッチした条件だけが適用されます**（*"only the last matching condition is applied"*）。条件を単純に並べても意図通りには動かず、相互排他になるよう順序を管理する必要があります。ポリシーが増えるほど transformation は複雑化し、組織変更のたびに書き換えが必要になります。現実的に機能するのは、**セントラル DCL 側で職位単位くらいの粗いポリシー**（例: Manager／Staff／Auditor）に留め、少数の条件分岐で収まる場合です。それより細かい場合は、IPS に業務ロジックを詰め込まず、§3 の **Identity Directory の SCIM2 API を話せる既存の HR/IGA ツール**にマッピング管理を任せる方が無難です。
 
 ---
 
@@ -115,16 +98,9 @@ CIS を構成する 3 サービス（[README](README.md#cis-を構成する-3-�
 
 > The decision **which application** may consume which API permission group is made by the administrator of the SAP Cloud Identity Services tenant, not by the application itself.
 
-この決定はトークンの **`ias_apis`** クレームに反映され（[02 章 §5](02-authentication.md#5-app-to-app-の認証方式技術通信--主体伝播)）、Provider アプリ側は「その API 権限グループにどんな DCL の `INTERNAL POLICY` を対応させるか」だけを決めます（06 章）。つまり——
+この決定はトークンの **`ias_apis`** クレームに反映され（[02 章 §5](02-authentication.md#5-app-to-app-の認証方式技術通信--主体伝播)）、Provider 側は「その API 権限グループにどんな DCL の `INTERNAL POLICY` を対応させるか」を決めます（06 章）。**「誰が何をしてよいか」の割当**と**「どのアプリが何を消費してよいか」の割当**が、同じ **IAS 管理コンソール**に集約されているのが CIS の特徴です。
 
-- **「誰が何をしてよいか」の割当**（本章 §2）と
-- **「どのアプリが何を消費してよいか」の割当**
-
-の両方が、同じ **IAS 管理コンソール**（アプリの Trust/dependency 設定と Authorization Policies 設定）に集約されているのが CIS の特徴です。
-
-> **ただし、これは純粋な追加コストでもあります。** XSUAA では技術通信・主体伝播の認可は基本 scope 判定の延長で済んでいましたが、CIS では App-to-App のたびに **dependency 登録・`INTERNAL POLICY` の用意・API 権限グループ→ポリシーのマッピング関数実装**という複数ステップが新たに必要になります。「アプリ間の権限がより明示的になった」という利点はある一方で、**開発・運用の手間が単純に増える**というトレードオフも正直に見ておくべきです。
-
-App-to-App の dependency 登録・Destination 設定の具体手順は [App-to-App 連携の設定と証明書運用](app2app-and-certificate-operations.md) にまとめています。
+ただしこれは追加コストでもあります。XSUAA では技術通信の認可は scope 判定の延長で済んでいましたが、CIS では App-to-App のたびに **dependency 登録・`INTERNAL POLICY` の用意・API 権限グループ→ポリシーのマッピング関数実装**という複数ステップが新たに必要になります。具体手順は [App-to-App 連携の設定と証明書運用](app2app-and-certificate-operations.md) にまとめています。
 
 ---
 
@@ -173,21 +149,18 @@ flowchart TB
     style Cips fill:#d5e8f9,stroke:#2980b9,color:#1a1a1a
 ```
 
-XSUAA 側は「ロールコレクションという器を作り、ユーザーかグループに割り当てる」2 段階です。CIS 側も、実体としては「ポリシー＝自動生成されるグループ」に対して、管理コンソールで個別に、または **IPS が属性条件で自動的に**、ユーザーを追加していく流れであり、見た目ほど単純な「個別割当のみ」ではありません。両者で異なるのは、**割当の結果が反映されるタイミング**です——XSUAA は次回ログインで新しい JWT に、CIS は実行時に配布される Authorization Bundle に反映されます。
+XSUAA は「器（ロールコレクション）を作り、ユーザーかグループに割り当てる」流れ。CIS は「ポリシー＝自動生成グループ」に対して、管理コンソールで個別に、または **IPS が属性条件で自動的に**ユーザーを追加していく流れです。決定的に違うのは**反映タイミング**——XSUAA は次回ログインの新 JWT、CIS は実行時の Authorization Bundle です。
 
 ---
 
 ## この章のまとめ
 
-- 割当の器が **ロールコレクション → 認可ポリシー（base policy／custom policy）**に変わり、開発者の定義をそのまま、または管理者が絞り込んで割り当てる。
-- 割当作業の場所が **BTP コックピット → IAS 管理コンソール**（Applications & Resources → Applications → 対象アプリ → Authorization Policies タブ → Assignments）に移る。
-- **認可ポリシーの実体はグループ。** ポリシーを作成すると同名のユーザーグループが自動生成され、そのグループへの追加が割当そのものになる。管理コンソールの「Assignments ペインで Add」はこのグループを操作する専用 UI にすぎない。
-- **グループへの一括割当・自動割当は可能だが、規模には限界がある。** IPS の `assignGroup` 変数 ＋ `condition` で属性ベースの自動割当ができるが、**同じユーザーが複数条件にマッチすると最後の条件だけが勝つ**仕様のため、ポリシーが増えると条件管理が複雑化する。現実的なのは職位単位程度の粗いポリシーまで。それ以上に細かい場合は、IPS に業務ロジックを詰め込まず、**Identity Directory の標準 SCIM2 API を話せる既存の HR/IGA ツール**（自前でカスタムアプリを作る必要はない）にマッピング管理を任せる方が現実的。
-- **複数アプリの権限を「1つの名前」で束ねる標準機能はない**が、**Identity Directory がそれらを横断的に見て・割り当てる中央ハブとして機能する**。SAP の公式アーキテクチャは AMS ポリシー・XSUAA ロールコレクション（IPS 複製）・他 SAP SaaS のロールを、すべて Identity Directory の「グループ」として統合する設計を示しており、"user view" で1ユーザーに複数グループをまとめて割当できる（標準 SCIM2 API 経由も可）。無くなったのは「1つの名前を割り当てるだけで複数アプリ分が自動展開される」という**再利用可能なバンドル・オブジェクト**だけで、それが必要なら[共有 IAS アプリ＋集中 DCL](shared-ias-app-central-dcl.md)という構成上の手当てもある。
-- **Admin Console での custom policy 作成を無条件の利点と見ない。** 本流はあくまで開発環境で DCL をコードとして書き、deployer で移送すること。管理者による直接作成はテナント固有の調整・緊急対応の逃げ道であり、変更管理や DCL の後方互換性の観点から本番での多用は推奨されない。
-- **IPS（Identity Provisioning）**は「誰が存在し、どのグループに属するか」を同期するレイヤーだが、グループ＝ポリシーである以上、**「何をしてよいか」の割当も実質的に担える**（上記）。
-- **App-to-App** も同じ IAS 管理コンソールで管理され、「どのアプリがどの API 権限グループを消費できるか」は **SCI テナント管理者**が決める（`ias_apis`）。ただしこれは XSUAA になかった **追加の設定コスト**（dependency 登録・`INTERNAL POLICY`・マッピング関数実装）でもある。
-- 反映タイミングも異なる：XSUAA は次回ログインで新しい JWT、CIS は実行時に配布される Authorization Bundle。
+- 割当の器が **ロールコレクション → 認可ポリシー**に変わり、割当場所が **BTP コックピット → IAS 管理コンソール**（Authorization Policies タブ → Assignments）に移った。
+- **認可ポリシーの実体はグループ。** ポリシーを作ると同名のユーザーグループが自動生成され、そのグループへの追加が割当そのもの。「Assignments ペインで Add」はこのグループを操作する UI にすぎない。
+- **複数アプリを「1つの名前」で束ねる再利用可能なバンドルは無い**が、**Identity Directory が全アプリの割当を横断的に扱う中央ハブ**として機能する。AMS ポリシー・XSUAA ロールコレクション（IPS 複製）・他 SAP SaaS のロールが同じ「グループ」として並び、user view や標準 SCIM2 API で1ユーザーにまとめて割り当てられる。ポリシー自体を統合したい場合は[共有 IAS アプリ＋集中 DCL](shared-ias-app-central-dcl.md)。
+- **自動割当は可能だが規模に限界がある。** IPS の `assignGroup` ＋ `condition` で属性ベースの自動割当ができるが、**複数条件にマッチすると最後の条件だけが勝つ**仕様のため、現実的なのは職位単位程度の粗いポリシーまで。それ以上は既存の HR/IGA ツール（SCIM2 対応）に任せる方が現実的。
+- **Admin Console での custom policy 作成は無条件の利点ではない。** 本流は開発環境で DCL をコード化し deployer で移送すること。管理者の直接作成はテナント固有調整・緊急対応の逃げ道。
+- **App-to-App** も同じ IAS 管理コンソールで管理され、消費可否は **SCI テナント管理者**が決める（`ias_apis`）。ただし dependency 登録・`INTERNAL POLICY`・マッピング関数実装という **XSUAA になかった追加コスト**を伴う。
 
 ## 次に読む
 
