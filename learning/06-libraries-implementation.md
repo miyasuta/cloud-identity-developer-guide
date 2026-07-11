@@ -152,9 +152,27 @@ CAP の場合、**技術ユーザー（technical user）トークン**につい�
 
 つまり、Provider 側が API 権限グループ `ReadCatalog` を公開し、それを消費する技術ユーザートークンが来たら、CAP は `req.user.is('ReadCatalog')` を true にしてくれます。cds モデル側で `ReadCatalog` ロールに権限を紐付けておけば、それだけで通ります。
 
-一方、**主体伝播（principal propagation）**や、より細かい制御が必要な場合は、[Technical Communication](../docs/Authorization/TechnicalCommunication.md) の仕組みを使います。ここは XSUAA になかった **追加コスト** です。
+つまり、**同じ自社ランドスケープ内で CAP を組み合わせる限り、App-to-App の認可は `provided-apis` の公開と管理者の Dependency 承認だけで完結** し、追加のコードは要りません。
 
-- Provider 側 DCL に **`INTERNAL POLICY`** を定義（API 権限グループごとの付与内容。管理者には見えないポリシー）。
+### `INTERNAL POLICY` とは — CAP では基本的に使わない
+
+より細かい制御が必要な場合に登場するのが **`INTERNAL POLICY`** です。まず基本を押さえます。
+
+- **何か**: 「この API 権限グループで呼ばれたら、何を許可するか」を定義する DCL ポリシー。
+- **普通の `POLICY` との違い**: 管理者には**見えず**、ユーザーに**割り当てるものでもない**。その API 権限グループを消費できる**呼び出し元に一律で適用**される（呼び出し元が誰かは区別しない）。
+
+```dcl
+// 例：ExternalOrder という API 権限グループで呼ばれたら、注文額 100 未満で CreateOrders を許可
+INTERNAL POLICY ExternalOrder {
+    USE shopping.CreateOrders RESTRICT order.total < 100;
+}
+```
+
+> **CAP の文脈では、`INTERNAL POLICY` を使う場面はほとんどありません。** 前述のとおり **技術ユーザー連携では不要**（`ias_apis` → 同名 cds ロールが自動）。`INTERNAL POLICY` が要るのは、実質 **主体伝播（principal propagation）で「アプリ A 経由だとユーザー本来の権限を一部に絞りたい」ケースだけ**です。しかもこれは、呼び出し元が **外部・第三者アプリ**のような「ユーザーの権限を丸ごと使わせたくない」相手のときに限られます。**自社内の CAP マイクロサービス同士の連携では、まず登場しません。**
+
+その数少ないケースで実際に絞る場合は、[Technical Communication](../docs/Authorization/TechnicalCommunication.md) の仕組みを使います（XSUAA になかった **追加コスト**）。
+
+- Provider 側 DCL に **`INTERNAL POLICY`** を定義（上記。API 権限グループごとの付与上限）。
 - **API 権限グループ名 → ポリシー名** のマッピング関数を実装し、`IdentityServiceAuthProvider`（Node）／`SciAuthorizationsProvider`（Java）へ登録する。
 
 ```js
@@ -243,7 +261,7 @@ if (decision.isGranted()) { /* 許可 */ }
 - **CAP では実装はほぼ変わらない** 🔑 — `@requires` / `@restrict` / `req.user.is()` はそのまま。`@sap/ams`（Java: `cap-ams-support`）が **「AMS ポリシー → cds ロール」変換を透過的に** 行い、フレームワークは従来どおりロールで認可する。
 - 開発者が実際に変えるのは **判定コードではなく配管** — 認証 `kind` を `xsuaa` → **`ias`**、ライブラリと DCL 生成・deployer は **`cds add ams`** が用意（多くは [04 章](04-configuration-artifacts.md)）。
 - **インスタンスベース絞り込み** は CAP が **CQL/CXN へ自動変換**。開発者は `@restrict` と `@ams.attributes` を書くだけ。
-- **App-to-App** は、技術ユーザーなら `ias_apis` から **cds ロールを自動付与**（実装ほぼ不要）。主体伝播・細かい制御は `INTERNAL POLICY` ＋ マッピング関数登録という **追加コスト**（[app2app doc](app2app-and-certificate-operations.md)）。
+- **App-to-App** は、技術ユーザーなら `ias_apis` から **cds ロールを自動付与**（実装ほぼ不要）。`INTERNAL POLICY` ＋ マッピング関数は、**主体伝播で外部アプリの権限を絞りたい**という限られたケース用で、**自社内 CAP 連携ではまず使わない**（[app2app doc](app2app-and-certificate-operations.md)）。
 - 移行期は **`ias` の XSUAA フォールバック（`xsuaa: true`）** と **`HybridAuthProvider`（scope→policy）** が橋渡し。ただし恒久保守コストにしない。
 - **非 CAP は参考**: `checkScope` → **`checkPrivilege`（`Decision`）** の実装差があり、行レベル絞り込みは条件木の自前翻訳が要る。CAP がこれらを隠蔽している。
 
