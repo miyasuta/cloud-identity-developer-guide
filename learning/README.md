@@ -37,7 +37,7 @@ XSUAA が「認証委譲・トークン発行・認可（scope）」を **一手
 | 03 | [認可の違い](03-authorization.md) | scope/RBAC → DCL ポリシー・実行時 PDP・インスタンスベース認可 |
 | 04 | [設定成果物の違い](04-configuration-artifacts.md) | `xs-security.json` → `identity` + `authorization.enabled` + DCL |
 | 05 | [ロール割当・管理の違い](05-role-assignment-admin.md) | BTP コックピット（ロールコレクション）→ IAS 管理コンソール（ポリシー割当）、IPS の位置づけ、App-to-App の権限決定者 |
-| 06 | ライブラリ・実装の違い *(作成予定)* | `@sap/xssec` scope 判定 → AMS クライアントライブラリ、CAP 連携 |
+| 06 | [ライブラリ・実装の違い](06-libraries-implementation.md) | `@sap/xssec` scope 判定 → AMS クライアントライブラリ、CAP 連携（CAP はほぼ透過的） |
 | 07 | まとめ・移行チートシート *(作成予定)* | XSUAA と CIS の **メリット・デメリット・差分が一目でわかるシート**（概念対応表 ＋ 各章で明らかになったトレードオフの集約）・移行観点 |
 
 > 本ガイドは段階的に作成しています。まずは **01 から** お読みください。
