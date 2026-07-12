@@ -51,6 +51,7 @@ XSUAA が「認証委譲・トークン発行・認可（scope）」を **一手
 | [App-to-App 連携の設定と証明書運用](app2app-and-certificate-operations.md) | dependency 登録・Destination 設定・証明書のローテーション運用（02 の認証方式に対する設定/運用面） |
 | [共有 IAS アプリと集中 DCL（複数 CAP 構成）](shared-ias-app-central-dcl.md) | 複数の CAP マイクロサービスが 1 つの IAS/AMS アプリ（`identity` インスタンス）を共有する場合の、集中 DCL（schema＋base policy）と各 CAP 側の設定・ビルド（03 の DCL/ポリシーに対する構成面） |
 | [ユーザー属性による動的な認可（CAP ＋ AMS）](dynamic-authorization-user-attributes.md) | `$user.division` などユーザー属性を条件に使い、単一ポリシーでロール爆発を回避する ABAC パターン。IAS 属性設定・`schema.dcl` の `$user` 宣言・`getInput` マッピング・ポリシー2方式（03 §3 のインスタンスベース認可の発展） |
+| [認証クレデンシャルの選択とローカル / 実 IAS でのテスト](credentials-and-local-testing.md) | `identity` は証明書だけでなく client secret も選べる（secret ならローテーション不要だが非推奨・マルチテナントは X.509 必須）。あわせて `.http` / Postman でのテスト方法（mocked 認証・実 IAS トークン取得・ハイブリッド） |
 | [IAS / AMS 用語集](glossary.md) | IAS/AMS の文脈で出てくる用語を「意味／設定箇所／使う場面」で引ける逆引きリファレンス。各用語から該当章へリンク |
 
 ## 関連する公開ドキュメント
