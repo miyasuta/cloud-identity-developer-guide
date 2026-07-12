@@ -4,6 +4,8 @@
 > 複数の CAP マイクロサービスが **1 つの IAS アプリ（＝ 1 つの `identity` インスタンス／AMS インスタンス）を共有** すると、認可の実体である **DCL（schema ＋ base policy）は 1 つの Authorization Bundle に集約** されます。AMS は DCL の **マージに対応していない** ため、各サービスがそれぞれ DCL をデプロイすると **相互に上書き** してしまいます。
 > 対策は明快です——**DCL は中央リポジトリで一元管理し、deployer を 1 本だけ動かして集中デプロイ**。各 CAP は自分のデプロイヤ生成を **無効化** し、ビルド／テスト用に中央 DCL を **参照** します。
 >
+> **⚠️ ただし「ユーザーへの一括割当」の代替ではありません**: 集中 DCL が束ねられるのは**カスタム CAP のポリシーだけ**です。実務の業務ロールは標準 SAP LoB ソリューション（S/4HANA Cloud・SuccessFactors 等）の権限にもまたがり、それらは AMS ポリシーではないので中央 DCL に入りません。**1 ユーザーへの業務ロール一括割当は Identity Directory / IGA（IAS の外側）の仕事**であり、集中 DCL の役割は「**カスタム側を少数の業務ロール型グループに整形して、その外側レイヤーの割当を楽にする**」ことです（[05 §3](05-role-assignment-admin.md#3-グループの役割の違い-)・[07 §3](07-summary-migration-cheatsheet.md#3-中心論点多数のマイクロサービスでcis-方式に乗れるのか-)）。
+>
 > 本ページは [03. 認可の違い](03-authorization.md)（DCL・base policy・bundle）の **構成／運用面** の補足です。実装の正は公開ドキュメント [Deploying DCL — Microservice Applications](../docs/Authorization/DeployDCL.md#microservice-applications) を参照してください。
 
 ---
