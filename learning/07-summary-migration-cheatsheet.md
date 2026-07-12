@@ -20,7 +20,7 @@
 | **行レベル（インスタンスベース）認可** | `@restrict ... where` で可能だが**条件はソースに固定**（変更＝再デプロイ） | **DCL の `RESTRICT`** で表現、管理者が Admin Console で**実行時に条件を派生**（[03 §3](03-authorization.md#3-インスタンスベース行レベル認可-)） | 条件をコードから切り離し、実行時・テナント単位で調整できる | 条件の所在が「コード＋ポリシー」に分かれ、追跡が一段複雑に |
 | **ロール割当** | BTP コックピットで**ロールコレクション**を組み立てて割当 | **IAS 管理コンソール**でポリシー（＝自動生成グループ）に割当。**IPS で属性条件の自動割当**も可（[05](05-role-assignment-admin.md)） | 中間の器を組む手間が減り、開発者定義のポリシーをそのまま割当 | IPS 属性割当は「**最後にマッチした条件だけが適用**」される仕様。ポリシーが細かいと破綻しやすい（§4） |
 | **複数アプリの権限を束ねる** | ロールコレクションが**複数アプリの権限を「1 つの名前」に**束ねられた | **名前付きの再利用可能バンドルは無い**。ただし **Identity Directory が全アプリ割当の中央ハブ**（[05 §3](05-role-assignment-admin.md#3-グループの役割の違い-)・§3） | Identity Directory + **SCIM2** で既存 IGA/HR ツールがそのまま統合ハブに使える | 「1 割当で複数アプリ分が自動展開される」オブジェクトは無い。束ねたければ[集中 DCL](shared-ias-app-central-dcl.md) など構成変更が要る（**§3 の中心論点**） |
-| **App-to-App（技術通信）** | 技術通信の設定（Destination・SAML/OAuth） | **dependency 登録 + `ias_apis` クレーム**（[02 §5](02-authentication.md#5-app-to-app-の認証方式技術通信--主体伝播)・[05 §5](05-role-assignment-admin.md#5-app-to-app-どのアプリがどの-api-を消費してよいかも管理者が決める)） | 共有 IAS への信頼集約で跨サブアカウント・跨リージョンが簡素化 | dependency 登録・`INTERNAL POLICY`・マッピング関数は**純粋な追加ステップ**（[06 §5](06-libraries-implementation.md#5-app-to-app技術通信-の実装--ias_apis-からロール自動付与)） |
+| **App-to-App（技術通信）** | **Destination を mta.yaml に宣言的に定義**すれば完結（技術通信＝SAML Bearer / client credentials ＋ scope） | **dependency 登録 + `ias_apis` クレーム**（[02 §5](02-authentication.md#5-app-to-app-の認証方式技術通信--主体伝播)・[05 §5](05-role-assignment-admin.md#5-app-to-app-どのアプリがどの-api-を消費してよいかも管理者が決める)） | 共有 IAS への信頼集約で跨サブアカウント・跨リージョンが簡素化 | **dependency 登録は管理コンソールの手動ステップで mta.yaml では完結しない**（Destination を宣言すれば済んだ XSUAA と違い、デプロイ記述子の外に承認作業が残る＝再現デプロイ性の低下）。加えて `INTERNAL POLICY`・マッピング関数も追加ステップ（[06 §5](06-libraries-implementation.md#5-app-to-app技術通信-の実装--ias_apis-からロール自動付与)） |
 | **実装（CAP）** | `@requires` / `@restrict` / `req.user.is()`、`@sap/xssec` | **書き方はほぼ変わらない**。`@sap/ams` が「ポリシー→ロール」を透過変換（[06](06-libraries-implementation.md)） | CAP なら判定コードの書き換えは**ほぼ不要**（`checkScope`→`checkPrivilege` は非 CAP のみ） | 認証 `kind`・依存ライブラリ・DCL 生成という「配管」の切替は必要（`cds add ams`） |
 | **移送・変更管理** | ロールコレクションは管理者がコックピットで運用 | 本流は **DCL をコード化 → deployer で移送**（[03](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)・[04 §4](04-configuration-artifacts.md#4-ビルドデプロイの成果物--cds-add-ams-が生成するもの)） | ポリシーが Git 管理・レビュー・CI 対象になり、監査証跡が残る | base policy 更新は**後方互換**（Forbidden Changes）に注意。Admin Console 手作りは本流でない（§4） |
 
@@ -109,8 +109,10 @@ flowchart TB
 3. **Admin Console での custom policy 作成は「本流の運用」ではない**
    本番でいきなり管理者がポリシーを手作りする運用は通常しません。本流は**開発環境で DCL をコード化し deployer で移送**することで、変更管理・監査・**後方互換**（[03 の Forbidden Changes](03-authorization.md#base-policy-と実行時ポリシー開発者-vs-管理者)）の制約が伴います。Admin Console 作成はテナント固有調整・緊急対応の**逃げ道**であって設計思想ではありません。
 
-4. **App-to-App の認可設定は純粋な追加ステップ**
+4. **App-to-App の認可設定は純粋な追加ステップ — しかも一部は宣言的に書けない**
    dependency 登録・`INTERNAL POLICY`・`ias_apis` マッピング関数の実装は、XSUAA の技術通信より**手間が増える**部分です（[06 §5](06-libraries-implementation.md#5-app-to-app技術通信-の実装--ias_apis-からロール自動付与)）。ただし自社内 CAP 連携で技術ユーザーを使う限り、`ias_apis` → 同名 cds ロール自動付与でほぼ済み、`INTERNAL POLICY` はまず登場しません。
+
+   より見落としやすい影響が **宣言的完結性の喪失**です。XSUAA では **Destination を mta.yaml に宣言的に定義**すれば App-to-App の配線がデプロイ記述子だけで完結し、環境の再作成もそのまま再現できました。CIS では、Provider 側の API 公開（`provided-apis`）は `identity` パラメータで宣言的に書けるものの、**Consumer 側の dependency 登録（＝管理者の承認）は IAS 管理コンソールの手動操作**で、**mta.yaml には書けません**（[app2app doc §2](app2app-and-certificate-operations.md#2-設定手順api-公開と-dependency-登録)）。結果として、デプロイ記述子の外に**手動ステップ（＝承認作業）が残り**、IaC / CI-CD による完全な再現デプロイが一段難しくなります。
 
 ---
 
