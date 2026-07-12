@@ -267,4 +267,4 @@ if (decision.isGranted()) { /* 許可 */ }
 
 ## 次に読む
 
-- **[07. まとめ・移行チートシート](07-summary-migration-cheatsheet.md)** *(作成予定)* — XSUAA と CIS の **メリット・デメリット・差分が一目でわかるシート**（各章のトレードオフを集約）
+- **[07. まとめ・移行チートシート](07-summary-migration-cheatsheet.md)** — XSUAA と CIS の **メリット・デメリット・差分が一目でわかるシート**（各章のトレードオフを集約）
