@@ -85,7 +85,33 @@ cloudsdk.ias-dependency-name=<dependency 名>
 実行時、Cloud SDK は **Consumer アプリにバインドされた自分の `identity` インスタンスの資格情報**を使ってトークンを取得します。つまり——**本人性は「自分のバインディング」**、**呼ぶ相手の指定は「dependency」**、という二段構えです（[02 §5](02-authentication.md)）。
 
 - 前提: 両アプリが同じ IAS テナントを信頼し、IAS 側で dependency が登録済み（§2）。
-- ユーザー文脈の伝播（named user / technical user）は、CAP の remote service 側 `onBehalfOf`（`currentUser` / `systemUser` / `systemUserProvider`）で制御します。
+- **ユーザー文脈の伝播（named user＝ログインユーザ / technical user）は Destination の認証タイプでは決まりません**。`NoAuthentication` は「Destination に資格情報を持たせない」ことを指定するだけで、テクニカルユーザ／ログインユーザのどちらで呼ぶかは**別途 CAP 側で指定**します。
+  - **CAP Java**: remote service の `onBehalfOf` で宣言的に指定。`currentUser`（既定＝ログインユーザがいれば伝播、なければテクニカルユーザにフォールバック）／`systemUser`（テナント別テクニカルユーザ）／`systemUserProvider`（プロバイダテナントのテクニカルユーザ）。`onBehalfOf` は **`cloudsdk.ias-dependency-name` を持つ IAS app-2-app Destination（＝この §3.1 の構成）にのみ効く**点に注意（他の Destination タイプでは無視される）。
+  - **CAP Node.js**: `onBehalfOf` 相当の宣言的キーは無く（SAP ドキュメントにも未整備の TODO が残る）、リモートサービス呼び出し時に現在の `req` を引き継ぐ（`srv.tx(req)` → ログインユーザ伝播）か、引き継がない（→ テクニカルユーザ）かで実行時に制御します。
+
+**CAP Java での `onBehalfOf` 指定箇所** — `srv/src/main/resources/application.yaml` の `cds.remote.services.<サービス名>.destination` 配下に書きます（この §3.1 の Destination 名を `destination.name` に指定）:
+
+```yaml
+# srv/src/main/resources/application.yaml
+cds:
+  remote.services:
+    RemoteIasService:
+      destination:
+        name: app2app        # ↑の NoAuthentication + cloudsdk.ias-dependency-name な Destination
+        onBehalfOf: systemUser   # 省略時は currentUser（ログインユーザ伝播＋テクニカルへフォールバック）
+```
+
+> **共有 identity バインディング（§3.1 脚注の Destination レス構成）の場合**は `destination` ではなく `binding` 配下に同じキーで書きます:
+>
+> ```yaml
+> cds:
+>   remote.services:
+>     OtherCapService:
+>       binding:
+>         name: shared-identity
+>         onBehalfOf: systemUser
+> ```
+
 - **この方式の最大の利点**: 資格情報が Destination に一切載らないため、**証明書 / secret のローテーション時に Destination を触る必要がありません**（§4.4）。
 
 > さらに、Consumer と Provider が **同じ `identity` インスタンスを共有**する構成なら、**Destination すら不要**です。CAP の remote service に `binding: name: <shared-identity>` を直接指定できます（CAP Java: "Binding to a Service with Shared Identity"、[共有 IAS 構成](shared-ias-app-central-dcl.md)）。
@@ -117,6 +143,19 @@ CAP プラグインを使わない場合や、汎用の Destination サービス
 ```
 
 ここで **トークン取得の認証（`clientSecret`）を mTLS（証明書）に置き換えられます**。ただしこの方式は **資格情報のコピーを Destination が抱える**ため、ローテーション時に **Destination 側の更新が必要**になります（§4.4）。この「トークン取得に使う証明書 / secret」の出所とローテーションが、次章の主題です。
+
+### 3.3 起点が approuter（UI5 / Build Work Zone）のとき 🔑
+
+§3.1 の `NoAuthentication` + `cloudsdk.ias-dependency-name` は **CAP／Cloud SDK ランタイム専用**です（プロパティ名の `cloudsdk.` が示すとおり）。UI5 を **Build Work Zone / approuter** から動かす構成では、Destination を解決・呼び出すのは **approuter** であり、CAP アプリではありません。approuter はこのプロパティを解釈せず、読むべき「自前 `identity` バインディング」も持たないため、**§3.1 は成立しません**。呼ぶ相手で 2 つに分かれます:
+
+| ケース | 実体 | Destination |
+|---|---|---|
+| **A. UI5 → 同じ IAS/XSUAA で守られた自前バックエンド** | approuter が**ログインユーザ自身のトークンをそのまま転送**（`forwardAuthToken` 等） | 資格情報なしで動くが、これは §3.1 の Cloud SDK 機構ではなく**単なるトークン転送**（同一 issuer を信頼する相手に自分のトークンを渡すだけ） |
+| **B. UI5 → 別の IAS アプリ（真の app2app）** | approuter に**トークン交換**をさせる | **§3.2**。`OAuth2JWTBearer` + `clientId`/`clientSecret`（＝冒頭ブログと同型） |
+
+> **⚠️ 混同注意**: A の「Destination に資格情報を載せない」姿は §3.1 と似て見えますが、中身は別物です。**§3.1（`NoAuthentication` + dependency）は「CAP バックエンド同士」専用**で、**approuter 起点の app2app は §3.2** になります。「approuter でも `cloudsdk.ias-dependency-name` が効く」と誤解しないこと。
+
+> **証明書は要る?**: **B でも証明書のアップロードは不要**です。ブログと同じく `clientId` + `clientSecret` だけで動きます。証明書が絡むのは、トークン取得の認証を **あえて secret から mTLS に強化**する場合だけ（§4.4 表③のオプション）で、必須ではありません。
 
 ---
 
