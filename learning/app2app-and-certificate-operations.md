@@ -182,7 +182,7 @@ modules:
 
 - **Cloud Foundry（classic）**: **完全無停止の自動更新はありません。再デプロイ or リバインドが必要**です。**直バインドの CAP アプリなら、再デプロイ（＝移送）するだけで binding が再作成され新証明書に更新**されます（4.1.1）。**最長 30 日**なので長い期限で頻度を下げる余地は小さく、**月次以内のローテーションが前提**——通常リリース／定期移送に吸収させます（4.2.2）。`${timestamp}` サービスキー方式（下記）は、**binding ではなく service-key を消費する構成**（外部 Consumer 等）向けの選択肢です。手動更新（再デプロイ / unbind→rebind）の使い分けは 4.2.1 を参照。
 - **Kyma**: SAP BTP サービスオペレーターの **`credentialsRotationPolicy`** により、**バックグラウンドで自動ローテーション**（再デプロイ不要）。
-- いずれの場合も、ライブラリは実行時の証明書差し替えに対応（4.1）なので、新しい証明書がバインディングに届けば**再起動なしで追従**します。
+- **ランタイム差し替え（4.1）が効く範囲に注意**: ライブラリの実行時差し替えは「**新しい証明書がプロセスに“届く”経路がある**」ことが前提です。**Kyma はマウントされた Secret が自動更新**されるので再起動なしで追従できます。一方 **CF の binding 証明書は `VCAP_SERVICES` に注入され、プロセス起動時に固定**される（[Cloud Foundry Docs: application binding](https://docs.cloudfoundry.org/devguide/services/application-binding.html)）ため、binding を作り直しても **アプリを restart/restage しないと新証明書は読み込まれません**。CF で無停止差し替えができるのは、`X509_PROVIDED` でアプリが独自にファイル/Secret を読み直す構成に限られます。**したがって「再デプロイなら無停止」は誤り**——ダウンタイムの整理は 4.2.3 を参照。
 
 CF のサービスキー自動更新（`${timestamp}`）の記述例 — **これは binding ではなく service-key を消費する構成向け**（外部 Consumer・跨ぎ等）。直バインドの CAP なら不要で、再デプロイだけで回ります（4.1.1）:
 
@@ -223,6 +223,8 @@ flowchart TB
 ### 4.2.1 再デプロイ（MTA）と unbind→rebind、どちらで更新するか
 
 証明書を切り替える（＝新しいバインディング証明書に更新する）手段は主に 2 つあります。**どちらが良いかは「デプロイ成果物とパイプラインを持っているか」で変わります**——一方的に再デプロイが上ではありません。
+
+> なお **unbind→rebind→restage は SAP 公式が IAS バインディングのローテーション標準手順として明記**しています（[Job Scheduling Service – Credential Rotation](https://help.sap.com/docs/JOB_SCHEDULER/07b57c2f4b944bcd8470d024723a1631/ed3bf285065e4d42b95926589c36d39a.html)：unbind → rebind で新資格情報が自動生成 → restage）。その場しのぎではなく**正規の選択肢**であり、しかもこの手順は **SAP Automation Pilot の提供カタログだけで自動化できます**（→ 4.2.3）。
 
 | | MTA 再デプロイ（binding 再作成） | 手動 unbind → rebind |
 |---|---|---|
@@ -265,6 +267,36 @@ flowchart TB
 > **上級策（任意）**: 回転する identity 資格情報リソースだけを**別 MTA / 別移送ノード**に切り出すと、ローテーション移送がアプリのコードに触れず blast radius を最小化できる。構成は一段複雑になるので、まずは上記 1–4 で足りることが多い。
 
 > ⚠️ **要環境確認**: cTMS で「**同一バージョンの再移送**」を再実行できるか（インポートキューの再処理・API 駆動での再トリガ可否）は、パイプライン / cTMS 設定に依存する。定期ローテーションを組む前に自環境で一度確認すること。
+
+### 4.2.3 ダウンタイムの正直な整理と Automation Pilot での自動化 🔑
+
+**「再デプロイなら無停止」は誤り**——ここは正直に。証明書を切り替えるには、どの方式でも**新しい資格情報をアプリプロセスに読み込ませる**必要があり、CF では binding 証明書が `VCAP_SERVICES` に注入されてプロセス起動時に固定されるため、**binding を作り直したら restart/restage が要る**（4.2）。
+
+| 方式 | アプリ停止 | 資格情報ギャップ | 無停止にできるか |
+|---|---|---|---|
+| **MTA 通常再デプロイ**（デフォルト strategy） | あり（stop→start） | 再起動窓に内包 | ❌ 単一インスタンスは瞬断あり |
+| **MTA Blue-Green**（[`bg-deploy` / Blue-Green Deployment Strategy](https://help.sap.com/docs/BTP/65de2977205c403bbc107264b8eccf4b/772ab72204f04946b79ce2d962e64970.html)） | **なし** | **なし**（green が新 binding で起動 → ルート切替 → blue 破棄） | ✅ **唯一の真の無停止経路** |
+| **unbind→rebind→restage**（SAP 公式の IAS ローテ手順） | あり（restage） | unbind〜restage 完了まで（発行済みトークンは ~1h 有効なので実害は限定的） | ❌（unbind 先行のギャップは原理的に消せない） |
+
+> **要点**: 単一インスタンスの Consumer アプリなら、通常再デプロイも rebind も**同程度の瞬断**がある。**真の無停止が要るなら Blue-Green（`bg-deploy`）**——これは再デプロイ方式だけが持つ経路で、rebind では原理的に到達できない。逆に**「軽く・コードに触れず・cTMS 再移送可否に依存せず」回したいなら rebind 方式**が向く。トレードオフであって一方的な優劣ではない。
+
+**Automation Pilot で rebind 方式を自動化する** — `cf` アクセス（技術ユーザー）さえ自動化に渡せば、unbind→rebind→restage を**提供カタログのコマンドだけ**で組めます:
+
+| ステップ | コマンド | カタログ |
+|---|---|---|
+| ① 旧 binding 削除 | [UnbindCfServiceInstance](https://help.sap.com/docs/automation-pilot/automation-pilot/unbindcfserviceinstance-command) | `cf-sapcp`（提供済み） |
+| ② 再バインド | [BindCfServiceInstance](https://help.sap.com/docs/AUTOMATION_PILOT/de3900c419f5492a8802274c17e07049/9d05845ff219428c85a3e475e33deacd.html) | `cf-sapcp` |
+| ③ restage（またはローリング再起動） | RestageCloudAlmCfApp / RestartCloudAlmCfApp | `calmhm-sapcp` |
+
+- **BindCfServiceInstance には任意 JSON の `parameters` 入力があり**、mta.yaml と同じ `{"credential-type":"X509_GENERATED","validity":30,"app-identifier":"<name>"}` をそのまま渡せる＝**デプロイ記述子と同一構成の binding を再作成**できる。
+- スケジュール実行は Automation Pilot 標準機能、失敗は Alert Notification 連携。期限監視は公式サンプル [Check CF Certificate Expiration](https://github.com/SAP-samples/automation-pilot-examples/blob/main/check-cf-certificate-expiration)（CF binding 内の証明書期限を監視）がそのまま使える。
+- **利点**: cTMS の「同一バージョン再移送が可能か」という未確認の前提（4.2.2 の⚠️）に依存しない。デプロイ成果物・パイプライン不要で、**コードに一切触れない**（blast radius は無変更再移送より小さい）。
+- **注意**: ①「本番への書き手は cTMS 一本」という統制原則（4.2.2）とは形式上ずれる → 「デプロイは cTMS／資格情報ローテは Automation Pilot の承認済み SOP」と役割分担を明文化する。②CF は同一アプリに二重 binding を持てないため **unbind が先**になり、restage 完了までの数十秒〜数分、**新規トークン取得だけが失敗し得る**（取得済みトークンは有効）——低トラフィック帯に。③自動化自身が **CF 技術ユーザー（SpaceDeveloper 権限＋user/password か refreshToken）を要する**＝管理する資格情報が1つ増える。
+- `app-identifier` を付けて subject（DN）を安定させるのは、この方式でも必須（4.1.1）。
+
+> **既定方針への位置づけ**: 4.2.2 の無操作フォールバック（「~25 日 移送が無ければ現行版を再移送」）を、**cTMS 再移送の代わりに Automation Pilot の unbind→rebind→restage シナリオ**で実現してもよい。cTMS 再移送可否の検証が不要になり、仕組みが一段軽くなる。無停止が必須の系だけは Blue-Green（`bg-deploy`）を選ぶ。
+
+> **出典**: [Job Scheduling Service – Credential Rotation](https://help.sap.com/docs/JOB_SCHEDULER/07b57c2f4b944bcd8470d024723a1631/ed3bf285065e4d42b95926589c36d39a.html)（IAS binding のローテは unbind→rebind→restage）、[Automation Pilot – Cloud Foundry (cf-sapcp) Catalog](https://help.sap.com/docs/AUTOMATION_PILOT/de3900c419f5492a8802274c17e07049/5146cd69fd7f4fc899ceadc39ba2f3b0.html)、[BindCfServiceInstance Command](https://help.sap.com/docs/AUTOMATION_PILOT/de3900c419f5492a8802274c17e07049/9d05845ff219428c85a3e475e33deacd.html)、[Blue-Green Deployment of MTAs](https://help.sap.com/docs/BTP/65de2977205c403bbc107264b8eccf4b/772ab72204f04946b79ce2d962e64970.html)、[CF application binding](https://docs.cloudfoundry.org/devguide/services/application-binding.html)。
 
 ### 4.3 手動更新が残るケース
 
