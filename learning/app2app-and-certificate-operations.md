@@ -136,7 +136,7 @@ XSUAA の client secret は「一度発行したら（明示的にローテー�
 | credential-type | 証明書の在り処 | 更新（ローテーション） | 手動作業 |
 |---|---|---|---|
 | `SECRET` | （証明書ではなく client secret） | secret のローテーション | — |
-| **`X509_GENERATED`** | **バインディングに含まれる**（SAP が生成） | `validity` で期限指定（SAP 管理証明書は短期。例: XSUAA 管理のデフォルト **7日**、最長 **1年**）。**サービスキー/バインディングのローテーション**で更新（CF は再デプロイ/リバインド、Kyma は自動。→ 4.2） | ランタイム依存（日々の手作業は不要にできる） |
+| **`X509_GENERATED`** | **バインディングに含まれる**（SAP が生成） | `validity`（日数）で期限指定。**デフォルト 30 日・最長 30 日**（`validity-type` は `DAYS` のみ、範囲 1–30）。**サービスキー/バインディングのローテーション**で更新（CF は再デプロイ/リバインド、Kyma は自動。→ 4.2） | ランタイム依存（日々の手作業は不要にできる） |
 | `X509_PROVIDED` | バインディングに**含まれない**（アプリが提供） | 自前の証明書管理に依存 | 自前で更新が必要 |
 
 > **アプリ側はランタイムの証明書差し替えに対応済み**
@@ -152,21 +152,41 @@ modules:
         parameters:
           config:
             credential-type: X509_GENERATED
-            validity: 90          # 証明書の有効日数（例）
-            validity-type: DAYS
+            validity: 30          # 証明書の有効日数（範囲 1–30、既定 30）
+            validity-type: DAYS   # DAYS のみ対応
 ```
+
+> **出典（`validity` の値）**: SAP 公式 [Reference Information for the Identity Service of SAP BTP](https://help.sap.com/docs/identity-authentication/identity-authentication/reference-information-for-identity-service-of-sap-btp)（[GitHub ソース](https://github.com/SAP-docs/btp-cloud-identity-services/blob/main/docs/Integrating-the-Service/reference-information-for-the-identity-service-of-sap-btp-9379444.md)）。`identity` サービスの `X509_GENERATED` は **`validity` 既定 30・範囲 1–30 DAYS**、`validity-type` は `DAYS` のみ、`key-length` は 2048（既定）/4096。**「7日」「最長1年」は誤り**——7日は別サービス（XSUAA）のデフォルト、1年は identity・XSUAA いずれの公式リファレンスにも無い。
+
+### 4.1.1 binding と service-key ではローテーションのされ方が違う（重要）
+
+有効期限は**バインディング単位でもサービスキー単位でもなく「生成される証明書（クレデンシャル）単位」**です。binding と service-key は**それぞれ独立した証明書＝独立した有効期限**を持ち、`credential-type` / `validity` は **config を書いた場所のクレデンシャル**に効きます。**CAP のデフォルトは `credential-type` を binding 側**（`modules[].requires[].parameters.config`）に置くので、効くのは **その binding の証明書**です（capire もこの書き方）。
+
+ローテーションの起こり方が両者で決定的に違います:
+
+| | **binding**（CAP デフォルト） | **service-key**（`resources[].service-keys`） |
+|---|---|---|
+| 更新のトリガ | **アプリの再デプロイ時に CF が binding を再作成 → IAS が新証明書を発行**（設定が未変更でも） | deploy では自動再作成されない。**名前で永続**するので回すには工夫が要る |
+| CF での回し方 | **再デプロイ（＝移送）するだけ**。`service-keys` も `${timestamp}` も不要 | サービスキー名に **`${timestamp}`** を使い、再デプロイ毎に新キー＝新証明書（旧キー自動削除） |
+| いつ使う | 直バインドの CAP アプリ | 外部 Consumer・サブアカウント跨ぎなど、**バインドできない相手に資格情報を渡す**場合 |
+
+> **要点（＝「デフォルト構成から変えたくない」への回答）**: **CAP デフォルトの binding のままでよい**。証明書は**アプリを再デプロイ（cTMS 移送）するたびに自動で更新**されます。`${timestamp}` サービスキーへ作り替える必要はありません（あれは service-key を消費する構成向け）。
+
+> ⚠️ **gotcha（IAS の User Management / SCIM API を使う場合のみ）**: binding 再作成で証明書がローテートされると、IAS が「**API Access for application users**」を自動的に無効化し、手動で再有効化するまで User Management REST API が止まる、という報告があります（[SAP Community](https://community.sap.com/t5/human-capital-management-q-a/ias-service-binding-auto-rotates-x-509/qaq-p/14268538)）。**通常のトークン認証／AMS だけなら無関係**です。
+
+> ⚠️ **要環境確認**: 「**未変更の再デプロイでも binding が再作成され新証明書が出る**」は SAP Community の報告ベースで、一次リファレンスの明文ではありません。本番前に自環境で **再デプロイ前後の証明書（serial / notBefore）が変わること**を一度確認してください。`app-identifier` を付けると**ローテーション後も subject（DN）が安定**し、信頼設定が壊れません（capire も「rotation に必要」と明記）。
 
 ### 4.2 ランタイム別のローテーション方法
 
 証明書の**ローテーション方法はランタイムで異なります**（質問への直接回答）。
 
-- **Cloud Foundry（classic）**: **完全無停止の自動更新はありません。再デプロイ or リバインドの操作が必要**です。推奨は MTA の *Automatic Service Key Renewal* — サービスキー名に `${timestamp}` を使うと、再デプロイのたびに新しいキー（＝新しい証明書）が作られ、**古いキーは自動削除**されます。アプリは `env-var-name` で固定エイリアス参照にします。手動なら「サービスキー再作成（または unbind → rebind）＋ restage」でも同じ結果。`validity` を長め（最長1年）にして再デプロイ頻度を下げ、CI/CD で自動実行するのが定石です。
+- **Cloud Foundry（classic）**: **完全無停止の自動更新はありません。再デプロイ or リバインドが必要**です。**直バインドの CAP アプリなら、再デプロイ（＝移送）するだけで binding が再作成され新証明書に更新**されます（4.1.1）。**最長 30 日**なので長い期限で頻度を下げる余地は小さく、**月次以内のローテーションが前提**——通常リリース／定期移送に吸収させます（4.2.2）。`${timestamp}` サービスキー方式（下記）は、**binding ではなく service-key を消費する構成**（外部 Consumer 等）向けの選択肢です。手動更新（再デプロイ / unbind→rebind）の使い分けは 4.2.1 を参照。
 - **Kyma**: SAP BTP サービスオペレーターの **`credentialsRotationPolicy`** により、**バックグラウンドで自動ローテーション**（再デプロイ不要）。
 - いずれの場合も、ライブラリは実行時の証明書差し替えに対応（4.1）なので、新しい証明書がバインディングに届けば**再起動なしで追従**します。
 
-CF のサービスキー自動更新（`${timestamp}`）の記述例:
+CF のサービスキー自動更新（`${timestamp}`）の記述例 — **これは binding ではなく service-key を消費する構成向け**（外部 Consumer・跨ぎ等）。直バインドの CAP なら不要で、再デプロイだけで回ります（4.1.1）:
 
-```yaml [mta.yaml（CF: サービスキー自動更新）]
+```yaml [mta.yaml（CF: サービスキー自動更新／service-key 消費時）]
 resources:
   - name: my-consumer-identity
     type: org.cloudfoundry.managed-service
@@ -177,7 +197,7 @@ resources:
         - name: consumer-key-${timestamp}   # 再デプロイ毎に新キー=新証明書、旧キーは自動削除
           config:
             credential-type: X509_GENERATED
-            validity: 365
+            validity: 30          # 範囲 1–30（既定 30）。1年などは不可
             validity-type: DAYS
   # アプリ側は env-var-name で固定エイリアス参照にする（キー名が毎回変わるため）
 ```
@@ -186,7 +206,7 @@ resources:
 flowchart TB
     subgraph AUTO["自動化できる（推奨）"]
         direction TB
-        A1["Cloud Foundry<br/>X509_GENERATED ＋<br/>サービスキー更新（${timestamp} 再デプロイ）"]
+        A1["Cloud Foundry<br/>直バインド: 再デプロイで binding 再作成<br/>（service-key 消費時のみ ${timestamp}）"]
         A2["Kyma<br/>credentialsRotationPolicy<br/>（バックグラウンド自動）"]
     end
     subgraph MANUAL["手動更新が必要"]
@@ -200,12 +220,58 @@ flowchart TB
     style MANUAL fill:#f9e6d5,stroke:#e67e22,color:#1a1a1a
 ```
 
+### 4.2.1 再デプロイ（MTA）と unbind→rebind、どちらで更新するか
+
+証明書を切り替える（＝新しいバインディング証明書に更新する）手段は主に 2 つあります。**どちらが良いかは「デプロイ成果物とパイプラインを持っているか」で変わります**——一方的に再デプロイが上ではありません。
+
+| | MTA 再デプロイ（binding 再作成） | 手動 unbind → rebind |
+|---|---|---|
+| **前提（必要なもの）** | **デプロイ可能な成果物（`mta.yaml`/`mtar`）＋デプロイ権限** | **`cf` CLI アクセスのみ（ソース・パイプライン不要）** |
+| 方式 | 宣言的（`mta.yaml` に記述） | 命令的（`cf` CLI の手作業） |
+| 自動化 | CI/CD で定期実行できる | 都度手動・忘れやすい |
+| 証明書の切替 | 再デプロイで **binding 再作成 → 新証明書**（旧は置き換え。service-key 消費時は `${timestamp}` で旧キー自動削除） | unbind を先にすると**資格情報が一時的に消える（ギャップ）** |
+| 再現性 / 監査 | ソース管理・パイプラインに残る | 記録が残りにくい |
+| 向く場面 | **CI/CD 管理下の定常ローテーション** | **ソースを持たない運用者**の対応、**緊急**（鍵漏洩の疑い）、MTA 管理外の単発 |
+
+- **ソース／パイプラインを持つチーム**なら、定常ローテーションは **MTA 再デプロイが既定**。宣言的で、直バインドなら再デプロイだけで binding が再作成され新証明書に更新、CI/CD に載せられ監査も効く。
+- **ソースや mtar を持たない運用者**（本番を `cf` で見るだけの立場、緊急対応など）にとっては、**unbind→rebind の方が現実的**。再デプロイは成果物とデプロイ権限がないと実行できないが、unbind→rebind は `cf` アクセスだけで完結する——ここが再デプロイにない強み。
+- unbind→rebind を使うときは「**新しいバインドを先に作ってから古いバインドを外す**」順にしてギャップ（認証断）を避ける。unbind を先にすると、その間アプリは有効な資格情報を持たない。
+- ⚠️ **MTA 管理下のリソースを手で unbind/rebind すると、次の `cf deploy` がデスクリプタ定義に合わせて元に戻す（ドリフト）**ことがある。MTA で管理しているなら手動更新はその場しのぎと割り切り、恒久策は通常の再デプロイ（＝移送）に寄せるのが安全。
+- どちらでも、CF では新しい資格情報を読ませるためにアプリの **restage / 再起動**が要る（ライブラリの実行時差し替え（4.1）を使わない限り）。
+
+### 4.2.2 定期ローテーションを cTMS 移送と衝突させずに回す
+
+**採用方針**: CF では **再デプロイ方式**を基本にする（**CAP デフォルトの直バインドのまま、構成変更なし**）。UPS 経由で資格情報を配布し定期更新する案も検討したが、①UPS は配布層であって証明書の発生源にならず結局ローテーション・ジョブの自作が要る、②秘密鍵のコピーが増える、③自動検出されず資格情報ロケーションの手当てが要る、④restage 前提、と割に合わないため見送り。ZTIS（`X509_ATTESTED`、自動ローテーション）は最も楽だが、**環境での利用可否が要確認**（公開ドキュメント・Kyma モジュールは存在するが CF/顧客利用の可否は landscape 依存）なので、確実な既定路線は再デプロイ方式とする。
+
+**衝突回避の原則**: 本番へのデプロイ権限を **cTMS 一本に保つ**。ローテーションもその同じ管を通し、GitHub Actions 等から**直接 `cf deploy` する第2経路を作らない**。
+
+前提となる事実 — **直バインドは再デプロイのたびに CF が binding を再作成し、IAS が（設定未変更でも）新証明書を発行**する（[SAP Community](https://community.sap.com/t5/human-capital-management-q-a/ias-service-binding-auto-rotates-x-509/qaq-p/14268538) 報告、4.1.1）。ゆえに「変更が無くても再移送すればローテーションになる」。（service-key 消費構成の場合は、`${timestamp}` が **mtar に焼き込まれずデプロイ時に解決**される性質で同じ効果を得る＝[service-keys 公式](https://github.com/SAP-docs/btp-cloud-platform/blob/main/docs/30-development/service-keys-32297f1.md)。）
+
+推奨パターン:
+
+1. **トリガは cTMS 移送に向ける**（直 `cf deploy` にしない）。スケジューラがやるのは cTMS 移送のキックで、出口は常に cTMS ＝書き手は1つ。
+2. **無操作フォールバックにする**: 一律に定期移送するのではなく「**本番に直近 ~25 日 移送が無ければ、現行の本番承認版を再移送する**」ゲート付きにする。通常リリースが月内にあればフォールバックは発火せず、**通常移送と重ならない**。cTMS はノード単位で移送をシリアライズするため、仮に重なってもクロバーせずキューされる。
+3. **再移送するのは現行の本番承認版**（main の先端や任意スナップショットではない）。コード変更を持ち込まない。
+4. **安全網**: `validity: 30`（最大）で窓を最大化／発火は ~20〜25 日の余裕を持たせる（移送1回のスリップ＝失効＝障害）／**証明書・バインディングの経過日数を監視しアラート**（失効忘れが証明書運用最大の事故）。
+
+| | 内容 |
+|---|---|
+| 既定方針 | 再デプロイ方式を cTMS 経由で（CAP デフォルトの直バインドのまま、構成変更なし） |
+| 発火条件 | 直近 ~25 日 本番移送が無い時だけ（無操作フォールバック） |
+| 移送対象 | 現行の本番承認版（変更を持ち込まない） |
+| 窓 / 余裕 | `validity: 30`、発火は 20〜25 日目安 |
+| 監視 | 証明書/バインディング経過日数のアラート必須 |
+
+> **上級策（任意）**: 回転する identity 資格情報リソースだけを**別 MTA / 別移送ノード**に切り出すと、ローテーション移送がアプリのコードに触れず blast radius を最小化できる。構成は一段複雑になるので、まずは上記 1–4 で足りることが多い。
+
+> ⚠️ **要環境確認**: cTMS で「**同一バージョンの再移送**」を再実行できるか（インポートキューの再処理・API 駆動での再トリガ可否）は、パイプライン / cTMS 設定に依存する。定期ローテーションを組む前に自環境で一度確認すること。
+
 ### 4.3 手動更新が残るケース
 
 - **Destination に独自の証明書（キーストア）を自分でアップロード**してトークン取得の mTLS に使う場合。→ 有効期限前に、更新した証明書をアップロードして Destination を手動更新する必要があります。SAP 公式も「有効期限前に、更新した証明書をアップロードして Destination を手動更新する（Rotate certificates before expiry by uploading the updated destination certificate）」と明記しています。
 - なお BTP Destination サービスには「デフォルトクライアント証明書」を自動生成・自動更新する仕組みもあり、これを使えば手動更新を避けられます。
 
-> **要点**: 「証明書だから毎回手動で入れ替えが必要」ではありません。**アプリを `identity` に `X509_GENERATED` でバインドし、CF は `${timestamp}` 再デプロイ、Kyma は `credentialsRotationPolicy`** に任せれば、日々の手作業は不要にできます。手動運用が残るのは「Destination に独自証明書を手で載せた」ケースです。
+> **要点**: 「証明書だから毎回手動で入れ替えが必要」ではありません。**アプリを `identity` に `X509_GENERATED` でバインドし、CF は再デプロイ（直バインドは binding 再作成で自動更新／service-key 消費時は `${timestamp}`）、Kyma は `credentialsRotationPolicy`** に任せれば、日々の手作業は不要にできます。手動運用が残るのは「Destination に独自証明書を手で載せた」ケースです。
 
 ### 4.4 Destination 側のローテーション操作 🔑
 
@@ -219,7 +285,7 @@ flowchart TB
 | **② client secret をインライン**（§3.2 の `clientSecret`） | **必要**。コックピット **Connectivity → Destinations → Edit** で `Client Secret`（変わっていれば `Client ID` も）を新しい値に貼り替え → **Save**。自動化するなら **Destination service REST API** / **MTA の destination-content（`init_data`）** / **Terraform** |
 | **③ 証明書キーストアをアップロード**（§3.2 で clientSecret を mTLS 化） | **必要**。Edit で更新キーストアを **再アップロード → Save**（§4.3）。または Destination service の **デフォルトクライアント証明書**（自動更新）を使う |
 
-> **⚠️ `${timestamp}` 自動キー更新（§4.2）と ② の相性に注意**: バインディングを毎回作り直して secret が変わる運用にすると、**secret を固定値で持つ静的 Destination は回すたびに壊れます**。両立させたいなら Destination 更新を同じ CI/CD パイプラインで自動化するか、そもそも **① を選んで二重管理を消す**のが定石です。
+> **⚠️ 証明書/secret のローテーション（§4.2）と ② の相性に注意**: 再デプロイのたびにバインディングが作り直されて証明書/secret が変わる運用にすると、**それを固定値で持つ静的 Destination は回すたびに壊れます**。両立させたいなら Destination 更新を同じ CI/CD パイプラインで自動化するか、そもそも **① を選んで二重管理を消す**のが定石です。
 
 **結論**: 「Destination に資格情報のコピーを持たせた瞬間、回すものが 2 つ（バインディング＋Destination）になり、両者は同期しない」。これを避けられるのが §3.1 の推奨構成であり、**①なら §4.2 のバインディング更新だけで、Destination は無操作**で済みます。
 
