@@ -144,6 +144,87 @@ XSUAA では最後に「scope を読む」で認可判断まで完結しまし�
 
 XSUAA では `clientid` + `clientsecret`（client secret）でトークンを取得するのが一般的でした。CIS では **X.509 証明書による mTLS（相互 TLS）** が基本になります。
 
+### まず、たとえで
+
+- **client secret（従来）＝ 合言葉方式** … 文字列を送って一致すれば通す。**盗まれたら、その文字列だけでなりすませる**。
+- **X.509（CIS）＝ 身分証 ＋ 実印方式** … 証明書（身分証）を見せ、**秘密鍵（実印）で署名**して「本人だ」と示す。秘密鍵は外に出さない。
+
+| もの | 役割 | たとえ |
+|---|---|---|
+| 証明書（certificate） | 身元を示す**公開情報** | 顔写真つき身分証 |
+| 秘密鍵（private key） | **本人だけが持ち、外に出さない**もの | 実印・サイン |
+
+```mermaid
+flowchart TB
+    subgraph SECRET["❌ client secret 方式（合言葉）"]
+        direction LR
+        S1["アプリ"] -->|"合言葉を送る<br/>（ただの文字列）"| S2["サーバー"]
+        S3["盗んだ人 🦹"] -.->|"同じ文字列で<br/>なりすませる"| S2
+    end
+
+    subgraph X509["✅ X.509 方式（身分証 ＋ 実印）"]
+        direction LR
+        C1["アプリ<br/>🔑 秘密鍵は外に出さない"] -->|"証明書を提示<br/>＋秘密鍵で署名"| C2["サーバー<br/>両者の対応を検証<br/>= mTLS"]
+        C3["盗んだ人 🦹"] -.->|"証明書だけでは<br/>署名できない ✗"| C2
+    end
+
+    style SECRET fill:#f9d5d5,stroke:#c0392b,color:#1a1a1a
+    style X509 fill:#d5f9e0,stroke:#27ae60,color:#1a1a1a
+    style S1 fill:#ffffff,stroke:#c0392b,color:#1a1a1a
+    style S2 fill:#ffffff,stroke:#c0392b,color:#1a1a1a
+    style S3 fill:#ffffff,stroke:#999999,color:#1a1a1a
+    style C1 fill:#ffffff,stroke:#27ae60,color:#1a1a1a
+    style C2 fill:#ffffff,stroke:#27ae60,color:#1a1a1a
+    style C3 fill:#ffffff,stroke:#999999,color:#1a1a1a
+```
+
+> **mTLS の "m" ＝ mutual（相互）**: 普通の HTTPS はサーバーだけが身分証を見せるが、mTLS は**クライアント（アプリ）も身分証を見せ合う**。
+
+### 署名の流れ（X509_GENERATED）
+
+`credential-type: X509_GENERATED` の標準ケースで、**誰が発行し、誰が署名するのか**をアクター単位で示します。
+
+> **Service Binding の位置付け**: Binding は「サービス」ではなく、**アプリに付随する資格情報の入れ物**（CF は `VCAP_SERVICES` 環境変数、Kyma はマウントされた Secret）です。自分では通信も署名もしません。だから下図では**アプリと同じ枠の中**に置いています。CIS が `①` で一度だけ中身を書き込み、アプリが `②` で**ローカルに読むだけ**（ネットワーク越しの呼び出しではない）。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Ops as デプロイ（cf / mta deploy）
+    participant CIS as SAP Cloud Identity Services（IAS）<br/>＝ CA ＋ トークンEP
+    box rgba(128,128,128,0.12) アプリのランタイム（同一プロセス / コンテナ）
+    participant App as CAP アプリ（クライアント）
+    participant Bind as Service Binding<br/>資格情報の入れ物
+    end
+
+    Note over Ops,Bind: ① プロビジョニング（デプロイ時・1回だけ）
+    Ops->>CIS: identity インスタンス作成 / バインド要求
+    CIS->>CIS: 証明書 ＋ 秘密鍵を発行（CA の役割）
+    CIS-->>Bind: 資格情報を書き込む<br/>（clientid / 証明書 / 秘密鍵）
+
+    Note over App,Bind: ② 起動時（ローカル読み込み・ネットワークなし）
+    App->>Bind: 資格情報を読む
+    Bind-->>App: clientid / 証明書 / 秘密鍵 🔑
+    Note over App: 秘密鍵はアプリのメモリに保持
+
+    Note over App,CIS: ③ トークン取得（mTLS ハンドシェイク・実行時）
+    App->>CIS: 接続開始（ClientHello）
+    CIS-->>App: クライアント証明書を要求
+    App->>CIS: 証明書を提示 ＋ このセッションの<br/>ハンドシェイク内容に秘密鍵で署名（CertificateVerify）
+    CIS->>CIS: 証明書内の公開鍵で署名を検証 ＝ 所有証明
+    CIS-->>App: トークン発行（IAS が JWT に署名、cnf.x5t に証明書指紋）
+```
+
+読み解きのポイント:
+
+- **発行と署名は主体が違う**: 証明書を**発行**するのは CIS（CA、`①`）。ハンドシェイクに**署名**するのはアプリ（`③`、秘密鍵の所有者）。identity インスタンスはどちらも行わない（能動的なアクターではない）。
+- **署名の対象は証明書ではない**: 署名するのは**このセッションのハンドシェイク内容**（`CertificateVerify`）。セッション固有なので盗聴しても使い回せない。証明書は CA 署名済みの公開情報を「提示」するだけ。
+- **秘密鍵はランタイムから出ない**: `③` で相手に渡すのは署名（所有の証拠）と証明書（公開情報）だけ。ただし `X509_GENERATED` では `①` で **秘密鍵が Binding に配布される**点が `X509_PROVIDED` との差。
+- **署名は 2 種類ある**: `③` のハンドシェイク署名（主体＝アプリ）と、発行される JWT への署名（主体＝IAS）。混同しない。
+
+> **credential-type による分岐**: 上図は `X509_GENERATED`（`①` で CIS が鍵を Binding に書き込む）。`X509_PROVIDED` / `X509_ATTESTED` では **Binding に鍵は入らず**、アプリが ZTIS 等から取り込んで `setCertificateAndKey(...)` で注入する（→ [App-to-App 連携と証明書運用](app2app-and-certificate-operations.md)）。`②` 以降の署名の流れは同じ。
+
+### 用語で整理すると
+
 - **mTLS**: クライアントとサーバーが互いに証明書で身元を証明し合う方式。
 - **所有証明（proof-of-possession）**: トークンには証明書のフィンガープリント（`cnf.x5t#S256`）が埋め込まれ、「このトークンは、この証明書を持つ者だけが使える」ことを保証します。トークンだけ盗まれても、対応する秘密鍵（証明書）が無ければ使えません。
 
