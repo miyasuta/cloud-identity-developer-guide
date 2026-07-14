@@ -1,7 +1,7 @@
 # 03. 認可の違い — scope 判定から DCL ポリシー・実行時評価へ
 
 > **この章の要点**
-> XSUAA では「認可＝トークンの `scope` を読んで真偽を判定する」ことでした。CIS では認可がトークンから外れ、**DCL（Data Control Language）で書いたポリシー** を **実行時に評価** します。これにより、真偽だけでなく **属性・行レベル（インスタンスベース）** の動的な認可が可能になります。評価は **アプリ内のローカル PDP** が、AMS から配布される **Authorization Bundle** を使って行います。
+> XSUAA では「認可＝トークンの `scope` を読んで真偽を判定する」ことでした。CIS では認可がトークンから外れ、**DCL（Data Control Language）で書いたポリシー** を **実行時に評価** します。これにより、真偽だけでなく **属性・行レベル（インスタンスベース）** の動的な認可が可能になります。評価は **アプリ内の AMS client library**（PDP＝Policy Decision Point としての役割を担う）が、AMS から配布される **Authorization Bundle** を使って行います。
 >
 > 本章は本ガイドの **核** です。前章（[02](02-authentication.md)）で「トークンは本人性だけを運ぶ」ことを見ました。では「何をしてよいか」は誰が・どう決めるのか——それが本章のテーマです。
 
@@ -189,7 +189,7 @@ flowchart LR
 - AMS は、アプリの base policy と管理者が作った実行時ポリシーを **中央でコンパイル** して **Authorization Bundle** にまとめます。
 - 各アプリ（クライアントライブラリ）は、起動時に自分の AMS インスタンスから **証明書（mTLS）でこの bundle をダウンロード** します。
 - その後も **定期的にポーリング** して、管理者による変更を取り込み、ローカルの複製を最新に保ちます。
-- 認可判定そのものは、**アプリのプロセス内にある PDP（Policy Decision Point）** が、ダウンロード済み bundle を使って **ローカルで評価** します。
+- 認可判定そのものは、**アプリのプロセス内にある AMS client library**（PDP＝Policy Decision Point としての役割を担う）が、ダウンロード済み bundle を使って **ローカルで評価** します。
 
 ```mermaid
 flowchart LR
@@ -220,7 +220,7 @@ flowchart LR
 - **速い・落ちにくい**: 判定はプロセス内で完結するため、リクエストごとの外部呼び出しがありません。
 - **それでも動的**: 管理者がポリシーを変えても、クライアントが bundle をポーリングして取り込むため、**トークンを再発行せずに** 認可が更新されます。XSUAA の「scope はトークンに焼き込まれ、変更には再ログインが要る」とは対照的です。
 
-> 01 章では「アプリが AMS に問い合わせる」と簡略化して描きましたが、正確には **PDP はアプリ内にあり、AMS からは bundle を受け取る** 関係です。だからこそ、アプリは起動時に「bundle が準備できたか」を確認してからトラフィックを受け付けます（readiness / startup check。→ 詳細は [Authorization Bundle](../docs/Authorization/AuthorizationBundle.md)）。
+> 01 章では「アプリが AMS に問い合わせる」と簡略化して描きましたが、正確には **判定を行う AMS client library はアプリ内にあり、AMS からは bundle を受け取る** 関係です。だからこそ、アプリは起動時に「bundle が準備できたか」を確認してからトラフィックを受け付けます（readiness / startup check。→ 詳細は [Authorization Bundle](../docs/Authorization/AuthorizationBundle.md)）。
 
 ---
 
@@ -287,7 +287,7 @@ service ProductService {
 - **DCL** は「アクション × リソース」を宣言し、`WHERE` で **属性条件（ABAC）** を表現できる。開発者の **base policy** と管理者の **実行時ポリシー（`USE ... RESTRICT`）** の分業。
 - CAP では **ロールベース**のまま。`ASSIGN ROLE`（＝ `$SCOPES` 上のアクション）でロールを割り当てる。
 - **インスタンスベース（行レベル）認可** 🔑 — 行レベルの絞り込みは XSUAA でも `@restrict ... where` で可能だったが、条件は **コードに固定** され変更に再デプロイが必要だった。AMS は条件を **DCL ポリシー** で表現し、**管理者が Admin Console で実行時に** 調整できる。`RESTRICT` の条件はフィルタとして返り、CAP では自動で `where`（CQL）へ変換される。
-- 判定は **アプリ内のローカル PDP** が **Authorization Bundle**（AMS が中央コンパイル → mTLS で DL → 定期ポーリング）を評価して行う。外部呼び出しなしで速く、かつポリシー変更は再ログイン不要で反映される。
+- 判定は **アプリ内の AMS client library**（ローカル PDP としての役割）が **Authorization Bundle**（AMS が中央コンパイル → mTLS で DL → 定期ポーリング）を評価して行う。外部呼び出しなしで速く、かつポリシー変更は再ログイン不要で反映される。
 
 ## 次に読む
 
