@@ -146,20 +146,71 @@ CAP プラグインを使わない場合や、汎用の Destination サービス
 
 ### 3.3 起点が approuter（UI5 / Build Work Zone）のとき 🔑
 
-§3.1 の `NoAuthentication` + `cloudsdk.ias-dependency-name` は **CAP／Cloud SDK ランタイム専用**です（プロパティ名の `cloudsdk.` が示すとおり）。UI5 を **Build Work Zone / approuter** から動かす構成では、Destination を解決・呼び出すのは **approuter** であり、CAP アプリではありません。approuter はこのプロパティを解釈せず、読むべき「自前 `identity` バインディング」も持たないため、**§3.1 は成立しません**。呼ぶ相手で 2 つに分かれます:
+§3.1 の `NoAuthentication` + `cloudsdk.ias-dependency-name` は **CAP／Cloud SDK ランタイム専用**です（プロパティ名の `cloudsdk.` が示すとおり）。UI5 を **Build Work Zone / approuter** から動かす構成では、Destination を解決・呼び出すのは **approuter** であり、CAP アプリではありません。approuter はこのプロパティを解釈せず、読むべき「自前 `identity` バインディング」も持たないため、**§3.1 のこの実装は成立しません**。ただし——**Work Zone 側にも、別プロパティ名でノークレデンシャルの dependency 方式が存在します**（下表 B）。呼ぶ相手・経路で 3 つに分かれます:
 
 | ケース | 実体 | Destination |
 |---|---|---|
-| **A. UI5 → 同じ IAS/XSUAA で守られた自前バックエンド** | approuter が**ログインユーザ自身のトークンをそのまま転送**（`forwardAuthToken` 等） | 資格情報なしで動くが、これは §3.1 の Cloud SDK 機構ではなく**単なるトークン転送**（同一 issuer を信頼する相手に自分のトークンを渡すだけ） |
-| **B. UI5 → 別の IAS アプリ（真の app2app）** | approuter に**トークン交換**をさせる | **§3.2**。`OAuth2JWTBearer` + `clientId`/`clientSecret`（＝冒頭ブログと同型） |
+| **A. UI5 → 同じ IAS/XSUAA で守られた自前バックエンド** | approuter が**ログインユーザ自身のトークンをそのまま転送**（`forwardAuthToken` 等） | 資格情報なしで動くが、これは単なるトークン転送（同一 issuer を信頼する相手に自分のトークンを渡すだけ） |
+| **B. UI5 → 別の IAS アプリ、Work Zone 標準の組み込み approuter（html5-apps-repo ランタイム）経由（真の app2app・ノークレデンシャル）** | Work Zone のランタイムが Destination の dependency 名を見て **IAS トークン交換**を行う | `Authentication: NoAuthentication` + **`HTML5.IASDependencyName=<dependency 名>`** |
+| **C. UI5 → 別の IAS アプリ、自前で書いた standalone approuter 経由** | 自分の approuter に**トークン交換**をさせる | **§3.2**。`OAuth2JWTBearer` + `clientId`/`clientSecret`（＝冒頭ブログと同型） |
 
-> **⚠️ 混同注意**: A の「Destination に資格情報を載せない」姿は §3.1 と似て見えますが、中身は別物です。**§3.1（`NoAuthentication` + dependency）は「CAP バックエンド同士」専用**で、**approuter 起点の app2app は §3.2** になります。「approuter でも `cloudsdk.ias-dependency-name` が効く」と誤解しないこと。
+> **B は §3.1 と同型の「dependency で資格情報を消す」構成が、Work Zone 側にも別プロパティ名で存在する、という話です**。Destination には `NoAuthentication` を指定し、代わりに `HTML5.IASDependencyName` に Provider が公開した **API 権限グループ名**を書きます。IAS 側では、**Work Zone の IAS アプリケーション**（CAP バックエンド側ではない点に注意）の `Application APIs → Dependencies` に同名の dependency を追加し、Provider の IAS アプリと公開エンドポイントを紐づけます（§2 の Provider/Consumer の関係と同型で、Consumer 役が Work Zone 自身になる）。
 
-> **証明書は要る?**: **B でも証明書のアップロードは不要**です。ブログと同じく `clientId` + `clientSecret` だけで動きます。証明書が絡むのは、トークン取得の認証を **あえて secret から mTLS に強化**する場合だけ（§4.4 表③のオプション）で、必須ではありません。
+```yaml
+# mta.yaml の destination-content モジュール（宣言的、GACD/Destination Deployer）
+- Authentication: NoAuthentication
+  HTML5.IASDependencyName: incidents-api   # Provider が Provided APIs に公開した名前
+  Name: incidents-management-srv-api
+  ProxyType: Internet
+  Type: HTTP
+  URL: ~{srv-api/srv-url}
+```
 
-### 3.4 §3.2 / §3.3-B で Destination に載せる資格情報の出所 🔑
+xs-app.json 側は通常どおり `"authenticationType": "ias"` を指定するだけで、資格情報は一切書きません。
 
-Destination に資格情報のコピーを持たせる構成（§3.2、および §3.3-B の approuter 起点 app2app）では、**そのコピー元をどこにするか**が運用の安定性を左右します。**アプリバインディングの資格情報を直に貼るのは避ける**——再バインド／再デプロイで作り直され、固定値の静的 Destination が**回すたびに壊れる**からです（[§4.4 表②の⚠️](#44-destination-側のローテーション操作-)）。デプロイ周期から切り離した安定した資格情報を使います。
+```mermaid
+flowchart LR
+    subgraph WZ["Work Zone（html5-apps-repo ランタイム）"]
+        UI5["UI5 アプリ"] --> AR["組み込み approuter"]
+    end
+    subgraph DEST["Destination Service"]
+        D["incidents-management-srv-api<br/>Authentication=NoAuthentication<br/>HTML5.IASDependencyName=incidents-api"]
+    end
+    subgraph IAS["IAS テナント"]
+        WZAPP["Work Zone の IAS アプリ<br/>dependency: incidents-api"]
+        PROVAPP["Provider の IAS アプリ<br/>Provided API: incidents-api"]
+    end
+    subgraph PROV["Provider（CAP バックエンド）"]
+        SRV["CAP サービス"]
+    end
+
+    UI5 -->|"① ログインユーザの IAS トークン"| AR
+    AR -->|"② Destination 解決<br/>→ dependency 名を検知"| D
+    AR -->|"③ dependency=incidents-api で<br/>トークン交換要求"| WZAPP
+    WZAPP -.dependency 参照.-> PROVAPP
+    WZAPP -->|"④ 交換後トークン<br/>aud=Provider, ias_apis=[incidents-api]"| AR
+    AR -->|"⑤ 交換後トークンを付けて呼び出し"| SRV
+    SRV -->|"⑥ ias_apis を検証して認可"| SRV
+
+    style UI5 fill:#d5e8f9,stroke:#2980b9,color:#1a1a1a
+    style AR fill:#d5e8f9,stroke:#2980b9,color:#1a1a1a
+    style D fill:#f9e6d5,stroke:#e67e22,color:#1a1a1a
+    style WZAPP fill:#f9e6d5,stroke:#e67e22,color:#1a1a1a
+    style PROVAPP fill:#d5f9e0,stroke:#27ae60,color:#1a1a1a
+    style SRV fill:#d5f9e0,stroke:#27ae60,color:#1a1a1a
+```
+
+> **出典**: SAP 公式サンプル [SAP-samples/btp-developer-guide-cap — 3-deploy-to-cf.md](https://github.com/SAP-samples/btp-developer-guide-cap/blob/main/documentation/xsuaa-to-ams/3-deploy-to-cf.md)、および同ドキュメントが参照する [SAP Help Portal: Switching to SAP Cloud Identity Services（app-to-app-navigation 節）](https://help.sap.com/docs/build-work-zone-standard-edition/sap-build-work-zone-standard-edition/switching-to-sap-cloud-identity-services-identity-authentication#app-to-app-navigation)。原文: 「If app to app navigation is modeled using the IASDependencyName property in the GACD (Generic Application Content Deployer) HTML5 deployer module, the **SAP Cloud Portal approuter** will perform app to app navigation...」——実行するのは **Work Zone/Cloud Portal が提供する管理された approuter** である点が明記されています。
+
+> **⚠️ B は Work Zone（html5-apps-repo 経由）限定と考えるのが安全**: SAP の文言は主語を「SAP Cloud Portal approuter」としており、これは Work Zone が提供する**管理された**ランタイムを指します。自分で `@sap/approuter` モジュールをデプロイし、Work Zone を介さずに独自ルーティングする（＝上表 **C** の standalone 構成）場合に `HTML5.IASDependencyName` が同様に解釈されるとは、SAP 公式ドキュメントで確認できませんでした。C では引き続き §3.2（`OAuth2JWTBearer` + `clientId`/`clientSecret`）が確実な選択肢です。
+
+> **⚠️ 混同注意**: A の「Destination に資格情報を載せない」姿は §3.1・B と似て見えますが、3 つとも中身が違います。**§3.1（`cloudsdk.ias-dependency-name`）は「CAP バックエンド同士」専用**、**B（`HTML5.IASDependencyName`）は「Work Zone の管理された approuter」専用**、**C（standalone approuter）は §3.2 一択**です。プロパティ名（`cloudsdk.` と `HTML5.` は別物）と適用範囲を取り違えないこと——「approuter なら／Work Zone なら常にノークレデンシャルにできる」わけではなく、**Work Zone の組み込みランタイムを使う場合に限って** B が使えます。
+
+> **証明書は要る?**: **B・C いずれも証明書のアップロードは不要**です。B は dependency 名だけで Destination に資格情報自体を持たず、C はブログと同じく `clientId` + `clientSecret` だけで動きます。証明書が絡むのは、C でトークン取得の認証を **あえて secret から mTLS に強化**する場合だけ（§4.4 表③のオプション）で、必須ではありません。
+
+### 3.4 §3.2 / §3.3-C で Destination に載せる資格情報の出所 🔑
+
+Destination に資格情報のコピーを持たせる構成（§3.2、および §3.3-C の standalone approuter 起点 app2app）では、**そのコピー元をどこにするか**が運用の安定性を左右します。**アプリバインディングの資格情報を直に貼るのは避ける**——再バインド／再デプロイで作り直され、固定値の静的 Destination が**回すたびに壊れる**からです（[§4.4 表②の⚠️](#44-destination-側のローテーション操作-)）。デプロイ周期から切り離した安定した資格情報を使います。
 
 | 出所 | デプロイ耐性 | いつ使う |
 |---|---|---|
@@ -366,7 +417,7 @@ flowchart TB
 
 | Destination の持ち方 | ローテーション時の Destination 操作 |
 |---|---|
-| **① 資格情報を持たない**（§3.1：`NoAuthentication` ＋ `cloudsdk.ias-dependency-name`、または共有 identity バインディング） | **不要**。ライブラリが実行時に新しいバインディング資格情報を読む。Destination には資格情報が無いので触らなくてよい |
+| **① 資格情報を持たない**（§3.1：`NoAuthentication` ＋ `cloudsdk.ias-dependency-name`、共有 identity バインディング、または §3.3-B：`NoAuthentication` ＋ `HTML5.IASDependencyName`） | **不要**。ライブラリ／Work Zone ランタイムが実行時にトークン交換を行う。Destination には資格情報が無いので触らなくてよい |
 | **② client secret をインライン**（§3.2 の `clientSecret`） | **必要**。コックピット **Connectivity → Destinations → Edit** で `Client Secret`（変わっていれば `Client ID` も）を新しい値に貼り替え → **Save**。自動化するなら **Destination service REST API** / **MTA の destination-content（`init_data`）** / **Terraform** |
 | **③ 証明書キーストアをアップロード**（§3.2 で clientSecret を mTLS 化） | **必要**。Edit で更新キーストアを **再アップロード → Save**（§4.3）。または Destination service の **デフォルトクライアント証明書**（自動更新）を使う |
 
