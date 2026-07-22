@@ -159,6 +159,48 @@ CAP の AMS プラグイン設定は `requires.auth.ams`（[cds env](../docs/CAP
 - **`dclRoot`** — DCL の生成・ローカルコンパイル・バリデーションが参照するルートフォルダ（既定は Node.js `ams/dcl`／Java `srv/src/gen/ams`）。**中央 DCL を submodule として取り込んだパス** を指すことで、ローカルビルド／テストが共有モデルで動きます。
 - 中央がモデルを所有し、サービス側で base policy を自動生成させたくない場合は **`generateDcl: false`** も併用します（各サービスの `@requires`/`@restrict` から生成された DCL を使う場合は、**中央リポジトリへ集約してから 1 本の deployer でデプロイ** します。AMS はマージしないため）。
 
+#### CAP Java の場合 — 設定項目は同じ、置き場所も同じ
+
+`generateDcl` / `dclRoot` / `generatePoliciesDeployer` は **`@sap/ams` の cds ビルドタスクの設定**であって Java ランタイムの設定ではありません。CAP Java でも `cds build`（cds-maven-plugin 経由）の実行時に、**プロジェクトルートの `package.json` の `"cds"` ブロック、または `.cdsrc.json`** から読まれます。**`application.yaml` や `pom.xml` に相当する項目はありません**。上の JSON はそのまま CAP Java プロジェクトでも使えます。
+
+Java で意識すべき差分は 2 つです。
+
+**① 既定パスが Java 用**（[cds Plugin: Configuration](../docs/CAP/cds-Plugin.md#configuration)）
+
+| プロパティ | Node.js 既定 | Java 既定 |
+|---|---|---|
+| `dclRoot` | `ams/dcl` | `srv/src/gen/ams` |
+| `dcnRoot` | `gen/dcn` | `srv/src/gen/ams/dcn` |
+| `policyDeployerRoot` | `gen/policies` | `srv/src/gen/policies` |
+
+`generateDcl: false` にすると DCL は「生成物」ではなく **ソース** になります。既定の `srv/src/gen/...`（`cds build` の生成先＝ふつう gitignore 対象）ではなく、**中央 DCL を取り込んだパス** を `dclRoot` に指定してください。
+
+**② `dcl-compiler-plugin` の `sourceDirectory` も同じ場所へ向ける（Node.js との最大の差）**
+
+ローカルテスト用の **DCL → DCN コンパイル** は、Node.js では `@sap/ams-dev` が `cds watch`/`cds test` の前に自動実行しますが、**Java では Maven プラグインの担当** です。このプラグインは cds env を読まないため、中央 DCL の場所を **二重に指定** する必要があります（[Testing: Compiling DCL to DCN](../docs/Authorization/Testing.md#compiling-dcl-to-dcn)・[DCL Compiler Maven Plugin](../docs/Libraries/java/dcl-compiler-maven-plugin.md)）。
+
+```xml
+<!-- srv/pom.xml -->
+<plugin>
+    <groupId>com.sap.cloud.security.ams.dcl</groupId>
+    <artifactId>dcl-compiler-plugin</artifactId>
+    <version>${sap.cloud.security.ams.dcl-compiler.version}</version>
+    <executions>
+        <execution>
+            <goals><goal>compile</goal></goals>
+            <configuration>
+                <!-- dclRoot と同じ中央 DCL を指す -->
+                <sourceDirectory>${project.basedir}/../central-authz/dcl</sourceDirectory>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+> ⚠️ **パスの基準が違います。** `dclRoot` は **プロジェクトルート起点**、Maven の `sourceDirectory` は **`srv/` モジュール起点** です。同じ中央 DCL を指していても文字列は一致しません（例: `central-authz/dcl` と `${project.basedir}/../central-authz/dcl`）。片方だけ直すと、ビルドは通るのにローカルテストが古い／空の DCN を読む、という気付きにくい不整合になります。
+
+> ランタイム側（`application.yaml` の `cds.security.authorization.ams.*` や、モックユーザーへの `policies` 割当）は **ビルド構成とは別レイヤ** で、中央 DCL 化しても変更不要です（[cap-ams](../docs/Libraries/java/cap-ams.md)・[Testing](../docs/Authorization/Testing.md)）。
+
 ### 中央 DCL の取り込み方
 
 中央リポジトリの `dcl` フォルダを、各サービスのリポジトリで参照します（[DeployDCL: Accessing central DCL files](../docs/Authorization/DeployDCL.md#accessing-central-dcl-files)）。代表的な手段は次の 3 つです。
@@ -205,6 +247,7 @@ git -C central-authz sparse-checkout set dcl
 - **AMS は DCL をマージしない** → サービスごとの個別デプロイは相互上書き。共有構成では厳禁。
 - **DCL は中央リポジトリで一元管理**し、**deployer 1 本で集中デプロイ**。横断ロールの重複を避け、管理コンソールで一貫した認可モデルに。
 - 各 CAP は **共有 `identity` にバインド**し、**`generatePoliciesDeployer: false`**（＋必要に応じて `generateDcl: false`）でデプロイヤ生成を無効化、**`dclRoot`** で中央 DCL（submodule）を参照。
+- **CAP Java でも設定項目・置き場所は同じ**（`package.json` の `"cds"` ／ `.cdsrc.json`）。ただし既定パスが Java 用で、ローカルテスト用の DCL→DCN コンパイルは **`dcl-compiler-plugin` の `sourceDirectory`** にも同じ中央 DCL を指定する必要あり。
 - ランタイムの実装は不要。特別なのはビルド／デプロイの構成だけ。
 
 ## 関連
