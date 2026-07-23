@@ -8,6 +8,8 @@
 > **`questions.md` の質問への回答:**
 > - App-to-App の dependency の考え方（Provider が API を公開 → Consumer が dependency を登録 → `ias_apis` に載る）
 > - Destination／アプリ側の具体設定と、証明書更新の運用（自動化できるか、Cloud Foundry での操作）
+>
+> **📄 パターン早見（別紙）**: 「自分のケースはどの構成か」を起点から素早く特定したいときは → [App-to-App パターン早見](app2app-pattern-flowchart.md)（起点ごとの 3 枚のフロー＋カタログ表）。
 
 ---
 
@@ -41,6 +43,26 @@ flowchart LR
 
 > トークン取得のフロー（技術通信＝client credentials／主体伝播＝JWT bearer・token exchange）と `ias_apis` の詳細は [02 §5](02-authentication.md) を参照。
 
+### 1.1 デプロイで作られる 2 つのルート（標準ルート と `.cert` ルート）🔑
+
+AMS（＝IAS ベース認証）を使う CAP アプリをデプロイすると、従来の XSUAA 構成と違い **ルートが 2 つ**生成されます。
+
+- **`${default-url}`（標準ルート）** — 通常の HTTPS。TLS はプラットフォームのルーターで終端され、**クライアント証明書はアプリまで転送されません**。ブラウザ／ユーザー経由のアクセス用。
+- **`${protocol}://${default-host}.cert.${default-domain}`（`.cert` ルート）** — **mTLS（相互 TLS）専用**。ルーターがハンドシェイクで**クライアント証明書を要求し、`x-forwarded-client-cert` ヘッダでアプリに転送**します。
+
+**なぜ 2 つ要るか**: IAS ベースの認証は、client secret ではなく **X.509 証明書**でトークンを取得したり、バックエンドへ mTLS 接続したりします（[02 §5](02-authentication.md)）。ところが Cloud Foundry の標準ルートを通るルーターは**クライアント証明書を要求・転送しません**——TLS はルーターで終端され、証明書はアプリまで届きません。そこで SAP は**ドメインに `.cert` セグメントを含む別ルート**を用意し、このルートに限りルーターが mTLS ハンドシェイクを行って証明書を `x-forwarded-client-cert` で転送します。
+
+| | 標準ルート `${default-url}` | `.cert` ルート |
+|---|---|---|
+| TLS | サーバ証明書のみ | **相互 TLS（mTLS）** |
+| クライアント証明書 | 転送されない | **要求され `x-forwarded-client-cert` で転送** |
+| トークン取得 | secret ベース | **証明書（mTLS）ベース**も可 |
+| 主な用途 | ブラウザ／ユーザー経由のアクセス | 証明書認証を要するマシン間通信・app2app |
+
+つまり、**ユーザーがブラウザで開くのは標準ルート**、**アプリが証明書で自分を名乗って別アプリや IAS トークンエンドポイントと機械間通信するときは `.cert` ルート**、という住み分けです。§3.1 の共有 identity 構成で Provider の URL を `https://<Provider srv-cert url>/...`（＝この `.cert` ルート）と書くのはこのためで、mTLS で呼ぶ相手のエンドポイントを `.cert` 側に向けています。この証明書がどこから来て、どうローテーションするかは §4 が主題です。
+
+> **出典**: SAP 公式 [Mutual TLS Authentication (mTLS) and Certificates Handling](https://help.sap.com/docs/BTP/65de2977205c403bbc107264b8eccf4b/46b8b85878ae4c51acbaa5f3822c777c.html)。原文: 「In Cloud Foundry, the client certificate is propagated using the `x-forwarded-client-cert` header. To enable this, the backend URL must contain a `.cert` segment in its domain.」および「When forwarding a request to business services, the application router uses these certificates also to create a `client_credentials` token or to exchange the login token.」——`.cert` ルートは、この mTLS ハンドシェイクと証明書ベースのトークン取得の入口になります。
+
 ---
 
 ## 2. 設定手順：API 公開と dependency 登録
@@ -68,7 +90,11 @@ flowchart LR
 
 Destination の組み方には **2 通り**あります。**誰の資格情報でトークンを取るか**が本質的な分岐点です。CAP で IAS 保護アプリを呼ぶなら §3.1（資格情報を Destination に持たせない）が推奨、汎用・非 CAP や従来型は §3.2 です。
 
-### 3.1 推奨（CAP）: 資格情報を持たない Destination 🔑
+> **📄 この §3 全体（§3.1〜§3.3）のパターンを 1 枚で見たいときは** → [App-to-App パターン早見（別紙）](app2app-pattern-flowchart.md)。起点（CAP Java / CAP Node.js / UI5）ごとに 3 枚のフローへ分け、P1〜P7 として一覧化しています。
+
+### 3.1 推奨（CAP Java）: 資格情報を持たない Destination 🔑
+
+> **⚠️ この §3.1 は CAP Java（Cloud SDK）専用です。CAP Node.js にはこのノークレデンシャル方式は存在しません**——Node.js で別の IAS アプリ（Provider）を呼ぶ「外部サービス」構成は、常に **§3.2** の Destination（`clientId`/`clientSecret` あり）を使います。具体的なサンプルコードは §3.2 末尾の「CAP Node.js での外部 IAS App-2-App」を参照してください。ただし、Consumer と Provider が**同じ identity インスタンスを共有する「co-located」構成**（後述）では、Node.js にも資格情報レスの選択肢があります。
 
 CAP（Java／Cloud SDK）で別の IAS アプリを呼ぶ場合、Destination には **client id も secret も証明書も書きません**。認証タイプを `NoAuthentication` にし、`cloudsdk.ias-dependency-name` で IAS の dependency を指すだけです。
 
@@ -87,7 +113,7 @@ cloudsdk.ias-dependency-name=<dependency 名>
 - 前提: 両アプリが同じ IAS テナントを信頼し、IAS 側で dependency が登録済み（§2）。
 - **ユーザー文脈の伝播（named user＝ログインユーザ / technical user）は Destination の認証タイプでは決まりません**。`NoAuthentication` は「Destination に資格情報を持たせない」ことを指定するだけで、テクニカルユーザ／ログインユーザのどちらで呼ぶかは**別途 CAP 側で指定**します。
   - **CAP Java**: remote service の `onBehalfOf` で宣言的に指定。`currentUser`（既定＝ログインユーザがいれば伝播、なければテクニカルユーザにフォールバック）／`systemUser`（テナント別テクニカルユーザ）／`systemUserProvider`（プロバイダテナントのテクニカルユーザ）。`onBehalfOf` は **`cloudsdk.ias-dependency-name` を持つ IAS app-2-app Destination（＝この §3.1 の構成）にのみ効く**点に注意（他の Destination タイプでは無視される）。
-  - **CAP Node.js**: `onBehalfOf` 相当の宣言的キーは無く（SAP ドキュメントにも未整備の TODO が残る）、リモートサービス呼び出し時に現在の `req` を引き継ぐ（`srv.tx(req)` → ログインユーザ伝播）か、引き継がない（→ テクニカルユーザ）かで実行時に制御します。
+  - **CAP Node.js**: この §3.1 の構成（`cloudsdk.ias-dependency-name`）自体が Node.js には存在しないため、`onBehalfOf` 相当の宣言的キーもありません。Node.js の外部 App-2-App は常に §3.2 の Destination 方式になり、**伝播モードは Destination の `Authentication` タイプ自体で決まります**——`OAuth2ClientCredentials` ならテクニカルユーザ、`OAuth2JWTBearer` ならログインユーザ伝播（詳細は §3.2）。
 
 **CAP Java での `onBehalfOf` 指定箇所** — `srv/src/main/resources/application.yaml` の `cds.remote.services.<サービス名>.destination` 配下に書きます（この §3.1 の Destination 名を `destination.name` に指定）:
 
@@ -101,7 +127,7 @@ cds:
         onBehalfOf: systemUser   # 省略時は currentUser（ログインユーザ伝播＋テクニカルへフォールバック）
 ```
 
-> **共有 identity バインディング（§3.1 脚注の Destination レス構成）の場合**は `destination` ではなく `binding` 配下に同じキーで書きます:
+> **共有 identity バインディング（§3.1 脚注の Destination レス構成）の場合**は `destination` ではなく `binding` 配下に同じキーで書きます。**ただし binding には Provider の URL が含まれない**ため、`options.url` を**明示指定が必須**です（capire 明記。開発時は不明なことが多く、環境変数 `CDS_REMOTE_SERVICES_..._BINDING_OPTIONS_URL` で渡す想定）:
 >
 > ```yaml
 > cds:
@@ -109,12 +135,42 @@ cds:
 >     OtherCapService:
 >       binding:
 >         name: shared-identity
+>         options:
+>           url: https://<Provider アプリ URL>   # ← 必須。binding には URL が入らない
 >         onBehalfOf: systemUser
 > ```
+>
+> > ⚠️ **この構成は「Destination すら不要」だが URL 問題は消えない**。binding が省けるのは**資格情報だけ**で、URL は `options.url`（＝環境変数）として**自分で持つ**ことになります。しかも **MTA の `~{module/url}` 参照は同一 `mta.yaml` 内でしか解決しない**ため、**Provider が別 MTA なら URL 変数参照は不可**。capire もこの構成を *"available within the **same SaaS application**"* と限定しており、**同一 SaaS アプリ / 同一 MTA に同居している場合の軽量ショートカット**と割り切るのが安全です。独立ライフサイクルの別 MTA 同士なら、URL を platform が環境／サブアカウント単位で解決してくれる **§3.1 本体の Destination（`cloudsdk.ias-dependency-name`）方式**に寄せます。
+> > **出典**: capire [Binding to a Service with Shared Identity](https://cap.cloud.sap/docs/java/cqn-services/remote-services#binding-to-a-service-with-shared-identity)。原文: "The plain service binding of XSUAA or IAS does not contain the URL of the remote API. Therefore, it needs to be explicitly configured in the `options` section. Since the URL is typically not known during development, you can define it as an environment variable."
 
 - **この方式の最大の利点**: 資格情報が Destination に一切載らないため、**証明書 / secret のローテーション時に Destination を触る必要がありません**（§4.4）。
 
 > さらに、Consumer と Provider が **同じ `identity` インスタンスを共有**する構成なら、**Destination すら不要**です。CAP の remote service に `binding: name: <shared-identity>` を直接指定できます（CAP Java: "Binding to a Service with Shared Identity"、[共有 IAS 構成](shared-ias-app-central-dcl.md)）。
+
+> **CAP Node.js での co-located（共有 identity）構成**: 同じ考え方が Node.js にもあります。ただし `binding` セクションではなく、**通常の `credentials` に `forwardAuthToken: true` を書くだけ**です（`onBehalfOf` 相当のキーは不要）。
+>
+> ```json
+> // package.json（Node.js: 共有 identity・トークン転送のみでトークン交換は不要）
+> {
+>   "cds": {
+>     "requires": {
+>       "sap.capire.flights.data": {
+>         "kind": "hcql",
+>         "[production]": {
+>           "credentials": {
+>             "url": "https://<Provider srv-cert url>/hcql/data",
+>             "forwardAuthToken": true
+>           }
+>         }
+>       }
+>     }
+>   }
+> }
+> ```
+>
+> Consumer と Provider が同じ `identity` インスタンスを共有しているため、**受信したログインユーザの JWT をそのまま転送するだけ**でよく（トークン交換不要）、Java の `onBehalfOf` のような追加設定は要りません——ログインユーザの文脈はそのまま維持されます。
+>
+> **出典**: [capire — Outbound Authentication: Co-located Services](https://cap.cloud.sap/docs/guides/security/remote-authentication#co-located-services)。原文: "For co-located services sharing the same identity instance, `forwardAuthToken: true` forwards the incoming JWT directly to the provider - no token exchange needed since the token is already valid. Unlike Java's `onBehalfOf` option, no additional configuration is required as the original user context is preserved in the forwarded token."
 
 ### 3.2 従来型: 資格情報を Destination に持たせる（汎用 / 非 CAP）
 
@@ -143,6 +199,43 @@ CAP プラグインを使わない場合や、汎用の Destination サービス
 ```
 
 ここで **トークン取得の認証（`clientSecret`）を mTLS（証明書）に置き換えられます**。ただしこの方式は **資格情報のコピーを Destination が抱える**ため、ローテーション時に **Destination 側の更新が必要**になります（§4.4）。この「トークン取得に使う証明書 / secret」の出所とローテーションが、次章の主題です。
+
+#### CAP Node.js での外部 IAS App-2-App 🔑
+
+**CAP Node.js の外部 App-2-App は、常にこの §3.2 の Destination 方式になります**（§3.1 は Java 専用）。`package.json` の remote service 定義から、資格情報を持つ Destination を名前で参照するだけです。
+
+```jsonc
+// package.json（Consumer 側）
+{
+  "cds": {
+    "requires": {
+      "auth": {
+        "[production]": { "kind": "ias" }   // このアプリ自身の受信リクエスト認証（§3.2冒頭の議論とは独立）
+      },
+      "ProviderService": {
+        "kind": "odata",                     // または "hcql" 等、Providerが公開するプロトコルに応じる
+        "[production]": {
+          "credentials": {
+            "path": "/path/to/provider/api",
+            "destination": "app2app"          // ↓のDestination名を参照
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+参照先の Destination 自体は、§3.2 冒頭の JSON 例（`Authentication: OAuth2ClientCredentials` または `OAuth2JWTBearer` ＋ `tokenService.body.resource`）とまったく同じです。**Node.js には Java の `onBehalfOf` に相当する追加キーが無く**、伝播モードは **Destination の `Authentication` タイプそのもの**で決まります。
+
+| Destination の `Authentication` | 伝播モード |
+|---|---|
+| `OAuth2ClientCredentials` | テクニカルユーザー（ユーザー文脈なし） |
+| `OAuth2JWTBearer` | ログインユーザー伝播（authorization_code フローで取得したユーザートークンが前提） |
+
+> **⚠️ MTA はサービス間の資格情報を解決できない**: この Destination の `clientId`/`clientSecret`（Consumer の IAS サービスキーから取得、[§3.4](#34-32--33-c-で-destination-に載せる資格情報の出所-)）は、`mta.yaml` のプレースホルダ構文（例: `${generated>xtravels-ias/clientid}`）で自動解決できません。**Destination は BTP Cockpit または Destination Service API 経由で手動作成**する必要があります。
+
+> **出典**: [capire — Outbound Authentication: External Services / IAS App-2-App](https://cap.cloud.sap/docs/guides/security/remote-authentication#external-services)（サンプル: [`xtravels`](https://github.com/capire/xtravels) ／ [`xflights`](https://github.com/capire/xflights)）。原文: "Both CAP Java and CAP Node.js support IAS App-2-App via configuration to handle token exchange automatically - Java uses service bindings with `ias-dependency-name`, while Node.js uses BTP Destinations with `tokenService.body.resource`." および "IAS App-2-App supports two authentication types: OAuth2ClientCredentials: For technical user scenarios (no user context); OAuth2JWTBearer: For user propagation (requires user token from authorization_code flow)."
 
 ### 3.3 起点が approuter（UI5 / Build Work Zone）のとき 🔑
 
@@ -405,7 +498,8 @@ flowchart TB
 ### 4.3 手動更新が残るケース
 
 - **Destination に独自の証明書（キーストア）を自分でアップロード**してトークン取得の mTLS に使う場合。→ 有効期限前に、更新した証明書をアップロードして Destination を手動更新する必要があります。SAP 公式も「有効期限前に、更新した証明書をアップロードして Destination を手動更新する（Rotate certificates before expiry by uploading the updated destination certificate）」と明記しています。
-- なお BTP Destination サービスには「デフォルトクライアント証明書」を自動生成・自動更新する仕組みもあり、これを使えば手動更新を避けられます。
+> **⚠️ 訂正：CF の Destination サービスに「自動更新されるデフォルトクライアント証明書」は無い**。年2回自動ローテーションされる "Client Default" 証明書（「Maintain Client Certificates」アプリ）は **SAP BTP ABAP 環境（Steampunk）専用**の機能で（[How to Handle Default Client Certificate Renewal](https://help.sap.com/docs/BTP/65de2977205c403bbc107264b8eccf4b/f7a5543ecf8d47a4b8224f3b3aaed867.html)）、**Cloud Foundry の Destination サービスには同等物がありません**。CF では証明書を **subaccount の Destination Certificates に手動で Generate / Upload** し、`KeyStoreLocation`（相手先 mTLS）または `tokenService.KeyStoreLocation`（トークン取得の mTLS）で参照します（[Using mTLS / Generate X509 Certificate in SAP BTP](https://help.sap.com/docs/BTP/09547b6161504c6d8e2eb5174e24d47b/ca4b9ab3d0cb46ed8055388e125126a2.html)）。**この keystore は自動更新されません**。
+> **→ CF で証明書更新を手放しにしたいなら**、Destination に keystore を持たせるのではなく、アプリを `identity` に `X509_GENERATED` でバインドし（SAP が発行・自動ローテ・IAS 登録も自動）、**ランタイムがその binding 証明書で mTLS する**構成（Java＝§3.1 の P1、Node.js＝Cloud SDK JS app2app の `mtlsKeyPair`）にします。ただし binding 直＝**Destination を介さない**ため URL は直指定になり、別 MTA 跨ぎには不向き（§3.1 の（注）と同じトレードオフ）。
 
 > **要点**: 「証明書だから毎回手動で入れ替えが必要」ではありません。**アプリを `identity` に `X509_GENERATED` でバインドし、CF は再デプロイ（直バインドは binding 再作成で自動更新／service-key 消費時は `${timestamp}`）、Kyma は `credentialsRotationPolicy`** に任せれば、日々の手作業は不要にできます。手動運用が残るのは「Destination に独自証明書を手で載せた」ケースです。
 
@@ -419,7 +513,7 @@ flowchart TB
 |---|---|
 | **① 資格情報を持たない**（§3.1：`NoAuthentication` ＋ `cloudsdk.ias-dependency-name`、共有 identity バインディング、または §3.3-B：`NoAuthentication` ＋ `HTML5.IASDependencyName`） | **不要**。ライブラリ／Work Zone ランタイムが実行時にトークン交換を行う。Destination には資格情報が無いので触らなくてよい |
 | **② client secret をインライン**（§3.2 の `clientSecret`） | **必要**。コックピット **Connectivity → Destinations → Edit** で `Client Secret`（変わっていれば `Client ID` も）を新しい値に貼り替え → **Save**。自動化するなら **Destination service REST API** / **MTA の destination-content（`init_data`）** / **Terraform** |
-| **③ 証明書キーストアをアップロード**（§3.2 で clientSecret を mTLS 化） | **必要**。Edit で更新キーストアを **再アップロード → Save**（§4.3）。または Destination service の **デフォルトクライアント証明書**（自動更新）を使う |
+| **③ 証明書キーストアをアップロード**（§3.2 で clientSecret を mTLS 化） | **必要**。subaccount の **Destination Certificates で Generate / Upload** した keystore を `KeyStoreLocation` / `tokenService.KeyStoreLocation` で参照し、期限前に **再生成／再アップロード → Save**（§4.3）。**CF に自動更新の default cert は無い**ので、自動化は **Destination service REST API / Terraform / 定期ジョブ**で keystore 更新を回すか、そもそも Destination に証明書を載せず **binding `X509_GENERATED`** に寄せる（後者は URL 直指定のトレードオフ・§4.3） |
 
 > **⚠️ 証明書/secret のローテーション（§4.2）と ② の相性に注意**: 再デプロイのたびにバインディングが作り直されて証明書/secret が変わる運用にすると、**それを固定値で持つ静的 Destination は回すたびに壊れます**。両立させたいなら Destination 更新を同じ CI/CD パイプラインで自動化するか、そもそも **① を選んで二重管理を消す**のが定石です。
 
