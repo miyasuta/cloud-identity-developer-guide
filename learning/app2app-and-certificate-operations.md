@@ -147,6 +147,8 @@ cds:
 
 > さらに、Consumer と Provider が **同じ `identity` インスタンスを共有**する構成なら、**Destination すら不要**です。CAP の remote service に `binding: name: <shared-identity>` を直接指定できます（CAP Java: "Binding to a Service with Shared Identity"、[共有 IAS 構成](shared-ias-app-central-dcl.md)）。
 
+> **Java にも Destination 経由のトークン転送（`TOKEN_FORWARDING`）という選択肢がある**: 上記の `binding: name` 直指定とは別に、Consumer と Provider が同じ `identity` インスタンスを共有する場合、**BTP Destination**（`Authentication: NoAuthentication` + `forwardAuthToken: true`）を `destination.name` に指定し、Java Cloud SDK の `AuthenticationType.TOKEN_FORWARDING` で受信トークンをそのまま転送する構成も動作確認できています（cap-ams-a2a Pattern 3 実機検証）。`binding: name` 方式との違いは **URL の持ち方**——`binding` は `options.url` をアプリの環境変数として自分で持つ必要があるのに対し、この Destination 方式は URL を Destination（platform 管理）に置けます。ただし token exchange は発生しないため、受信した `cnf.x5t#S256` はそのまま Provider に渡り、Provider 側が `.cert` ルートでの mTLS を要求する場合は証明書と一致しない点は `binding` 方式と同じ制約を負います。
+
 > **CAP Node.js での co-located（共有 identity）構成**: 同じ考え方が Node.js にもあります。ただし `binding` セクションではなく、**通常の `credentials` に `forwardAuthToken: true` を書くだけ**です（`onBehalfOf` 相当のキーは不要）。
 >
 > ```json
@@ -199,6 +201,18 @@ CAP プラグインを使わない場合や、汎用の Destination サービス
 ```
 
 ここで **トークン取得の認証（`clientSecret`）を mTLS（証明書）に置き換えられます**。ただしこの方式は **資格情報のコピーを Destination が抱える**ため、ローテーション時に **Destination 側の更新が必要**になります（§4.4）。この「トークン取得に使う証明書 / secret」の出所とローテーションが、次章の主題です。
+
+> **⚠️ CAP Node.js から IAS 発行のユーザートークンを伝播させる場合、`x_user_token.jwks_uri` が事実上必須**: 公式ドキュメントの Destination プロパティ表には無いプロパティですが、CAP Node.js の Cloud SDK は当該 Destination の解決が必要なリクエストのたびに、受信したユーザートークンが XSUAA 発行か IAS 発行かをローカルで判定します。IAS 発行（`jku` クレームなし）と判定した場合、**Destination 設定側に `x_user_token.jwks_uri` があるか**を事前チェックし、無いと `Failed to verify the JWT with no JKU!` で**Destination サービスにすら到達せず** 502 で失敗します（`OAuth2ClientCredentials`＝技術ユーザーのみの構成では不要）。
+>
+> ```json
+> {
+>   "Name": "app2app",
+>   "Authentication": "OAuth2JWTBearer",
+>   "x_user_token.jwks_uri": "https://<Consumer の IAS テナント URL>/oauth2/certs"
+> }
+> ```
+>
+> 出典: cap-ams-a2a Pattern 2 実機検証。
 
 #### CAP Node.js での外部 IAS App-2-App 🔑
 

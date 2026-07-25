@@ -148,7 +148,7 @@ flowchart TD
 
 ## 6. Proof-of-Possession（PoP）を保つ場合の呼び方
 
-**PoP は「Provider が呼び出し先として要求するか」の軸**で、言語ランタイム（Java/Node.js）とは独立です。しかも**現代のデフォルトは両ランタイムとも `.cert` ルートで有効**（CAP Java＝SAP BTP Spring Security Client 3.5.1+ で既定強制、Node.js＝`@sap/xssec` が `.cert` ルートで既定有効）。よって実務では **「Provider は証明書提示を要求する」と想定するのが安全**です。
+**PoP は「Provider が呼び出し先として要求するか」の軸**で、言語ランタイム（Java/Node.js）とは独立です。しかも**現代のデフォルトは両ランタイムとも PoP 検証が有効**です——ただし**発火条件はランタイムで異なります**。**Node.js（`@sap/xssec`）は `.cert` ルートへのリクエスト時のみ**デフォルト検証し、plain ルートでは発火しません。一方 **Java（SAP BTP Spring Security Client 3.5.1+）は `cnf` クレームさえトークンに含まれていればルートを問わず**検証し、証明書ヘッダが無ければ拒否します（cap-ams-a2a Pattern 3/4 の実機検証で確認・訂正済み。「両ランタイムとも `.cert` ルート限定」という以前の理解は誤りだった）。よって実務では **「Provider は証明書提示を要求する」と想定するのが安全**です。
 
 PoP 有効時の原則は 1 つ——**「受け取ったトークンを転送する」のをやめ、「自分の証明書に紐づくトークンを取り直して `.cert` ルートに mTLS で出す」**。この「取り直し＋mTLS」を自動でやるのが Destination／binding 経由のパターンです。
 
@@ -159,6 +159,8 @@ PoP 有効時の原則は 1 つ——**「受け取ったトークンを転送�
 | ~~P2 co-located forwardAuthToken~~ | **PoP 有効では使えない**（転送＝再発行しないため cnf 不一致） | — | — |
 
 > **⚠️ 重要｜PoP 版 P3 の Destination は「secret」ではなく「証明書」を持つ**: 素の §3.2（`clientId`/`clientSecret`）は **PoP を強制しない Provider にしか通りません**。PoP 有効の Provider には、`.cert` ルートへの mTLS と cnf 一致のため **Destination がクライアント証明書を持つ必要**があります——subaccount の **Destination Certificates で Generate / Upload** した keystore を `KeyStoreLocation` / `tokenService.KeyStoreLocation` で参照します。**⚠️ CF の Destination サービスに「自動更新される default cert」は無い**（年2回自動ローテの "Client Default" は ABAP 環境専用。§4.3 訂正）ため、**この keystore はローテーションが手動**（§4.4 ③）＝ REST API/Terraform 等で自動化するのが実務。
+>
+> **🚫 この構成は実機では未成立（cap-ams-a2a Pattern 4-mTLS で検証）**: 「Destination にクライアント証明書を持たせて `.cert` ルートへ mTLS する」構成を `OAuth2ClientCredentials` で実際に組んだところ、token endpoint への mTLS 認証・cert-bound トークンの取得自体は成功したが、**Java Provider への実際のリソース呼び出し（GET）では証明書が提示されず、`x-forwarded-client-cert` が空のまま 401 になった**。原因は `@sap-cloud-sdk/connectivity`（v4.7.0 時点）の `getKeyStoreOptions()` が `destination.authentication === 'ClientCertificateAuthentication'` の場合にしか keystore をリソース呼び出しの TLS ハンドシェイクに反映しないため（[cloud-sdk-js#3544](https://github.com/SAP/cloud-sdk-js/issues/3544) としてコード自身に明記）。`OAuth2ClientCredentials`/`OAuth2JWTBearer` では keystore は token endpoint 認証にしか使われず、構造的にリソース呼び出し側の mTLS が成立しない。`Authentication` を `ClientCertificateAuthentication` に変える案も、mTLS 接続の確立のみで OAuth フローを実行しないため Bearer JWT 自体が発行されず不採用だった。**つまり上表の「P3 の証明書版」は、少なくとも本 SDK バージョンでは理論上の構成にとどまり、実機での動作は確認できていない**（SDK のバグ修正や別バージョンでの再検証が必要）。
 
 ### 6.1 Node.js の構造的コスト｜URL×証明書自動×資格情報レスの 3 点同時取りは不可
 
@@ -173,6 +175,8 @@ app2app で欲しい 3 つ——**(1) URL を Destination に解決させる（�
 | ~~理想（Java P1 相当）~~ | ✅ | ✅ | 無し | **Node.js には無い** |
 
 > **実務の落とし所**: **別 MTA 跨ぎの Node.js は「P3・Destination＋keystore」＋証明書ローテ自動化**（URL 解決を取り、証明書手動を自動化で吸収）。**同居なら binding 直**（URL 直指定が許容できるため）。「URL も証明書も手放し」は **Java P1 の特権**で、Node.js は必ず一方のコストを負う——これが Node.js の app2app が Java より一段不利な核心です。
+>
+> **⚠️ ただし「P3・Destination＋keystore」で PoP まで満たせるかは別問題（未実証）**: 上表は証明書のローテーション管理コストの比較であり、`OAuth2ClientCredentials`/`OAuth2JWTBearer` の keystore が実際にリソース呼び出しの mTLS に反映されるかどうかとは独立の話。§6 の注記のとおり、cap-ams-a2a の実機検証では `@sap-cloud-sdk/connectivity` の既知バグ（[cloud-sdk-js#3544](https://github.com/SAP/cloud-sdk-js/issues/3544)）により、この構成での PoP 有効 Provider への実呼び出しは 401 で失敗した。「証明書を Destination に持たせれば PoP を満たせる」という前提自体、現行 SDK では成立しない可能性がある。
 
 > **要点1｜転送をやめてもユーザーは失わない**: Java は `onBehalfOf: currentUser`、Node.js は `OAuth2JWTBearer` が、交換後もログインユーザ文脈を伝播します。
 >
