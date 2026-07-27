@@ -92,6 +92,18 @@ Destination の組み方には **2 通り**あります。**誰の資格情報�
 
 > **📄 この §3 全体（§3.1〜§3.3）のパターンを 1 枚で見たいときは** → [App-to-App パターン早見（別紙）](app2app-pattern-flowchart.md)。起点（CAP Java / CAP Node.js / UI5）ごとに 3 枚のフローへ分け、P1〜P7 として一覧化しています。
 
+> **⚠️ 混同しやすい点：IAS にトークン発行を「依頼」しているのは誰か**
+> Destination を経由するからといって、**常に Destination Service がトークンを取りに行くわけではありません**。Destination の `Authentication` タイプによって、依頼元（＝実際に IAS の token endpoint を叩く主体）が変わります。
+>
+> | | Destination の `Authentication` | 依頼元 | Destination が持つもの |
+> |---|---|---|---|
+> | **§3.1** | `NoAuthentication` + `cloudsdk.ias-dependency-name` | **Consumer アプリ自身**（Cloud SDK が自分の binding 証明書で直接 IAS に依頼） | ルーティング情報のみ（URL・dependency 名）。資格情報もトークンも持たない |
+> | **§3.2** | `OAuth2ClientCredentials` / `OAuth2JWTBearer` | **Destination Service**（自身が保持する clientId/secret で IAS に依頼し、取得済みトークンをアプリへ返す） | 資格情報（clientId/secret または証明書）＋取得したトークン |
+> | **§3.3-B**（Work Zone） | `NoAuthentication` + `HTML5.IASDependencyName` | **Work Zone 組み込み approuter**（§3.1 と同型：Destination はルーティング情報のみ） | ルーティング情報のみ |
+> | **§3.3-C**（standalone approuter） | §3.2 と同じ | **Destination Service**（§3.2 と同型。呼び出し元が UI5 の approuter に変わるだけ） | §3.2 と同じ |
+>
+> 分岐の理由は単純です——`NoAuthentication` には Destination Service が実行できる OAuth 設定（token endpoint・grant type）が無いため、**トークンを取りに行く役目は呼び出し元（アプリまたは approuter）自身に残ります**。逆に `OAuth2*` 系は Destination 自体に token endpoint と資格情報が設定されているため、**Destination Service がその場でトークンを取得してから返す**のが標準動作です。各パターンの図中に依頼元を明記しています。
+
 ### 3.1 推奨（CAP Java）: 資格情報を持たない Destination 🔑
 
 > **⚠️ この §3.1 は CAP Java（Cloud SDK）専用です。CAP Node.js にはこのノークレデンシャル方式は存在しません**——Node.js で別の IAS アプリ（Provider）を呼ぶ「外部サービス」構成は、常に **§3.2** の Destination（`clientId`/`clientSecret` あり）を使います。具体的なサンプルコードは §3.2 末尾の「CAP Node.js での外部 IAS App-2-App」を参照してください。ただし、Consumer と Provider が**同じ identity インスタンスを共有する「co-located」構成**（後述）では、Node.js にも資格情報レスの選択肢があります。
@@ -109,6 +121,34 @@ cloudsdk.ias-dependency-name=<dependency 名>
 ```
 
 実行時、Cloud SDK は **Consumer アプリにバインドされた自分の `identity` インスタンスの資格情報**を使ってトークンを取得します。つまり——**本人性は「自分のバインディング」**、**呼ぶ相手の指定は「dependency」**、という二段構えです（[02 §5](02-authentication.md)）。
+
+**トークン取得の流れ（トークン発行依頼元＝Consumer アプリ自身）**: Destination は URL と dependency 名を渡すだけで、資格情報もトークンも一切保持しません。IAS に直接トークンを依頼するのは、Destination Service ではなく **Consumer アプリの Cloud SDK** です（§3.2 との対比は上表参照）。
+
+```mermaid
+flowchart LR
+    subgraph C["Consumer アプリ（CAP Java）"]
+        SDK["Cloud SDK<br/>自分の identity binding<br/>（証明書＋秘密鍵）を保持"]
+    end
+    subgraph DEST["Destination Service"]
+        D["app2app<br/>Authentication=NoAuthentication<br/>cloudsdk.ias-dependency-name=dependency名<br/>資格情報・トークンは持たない"]
+    end
+    IAS["IAS トークンエンドポイント"]
+    subgraph P["Provider アプリ"]
+        SRV["API"]
+    end
+
+    SDK -->|"① Destination app2app を解決"| D
+    D -->|"② URL ＋ dependency 名を返す<br/>（トークンは含まない）"| SDK
+    SDK -->|"③ 自分の証明書で mTLS 接続 ＋<br/>resource=urn:...dependency名<br/>（Destination を介さず直接依頼）"| IAS
+    IAS -->|"④ token 発行<br/>（aud=Provider, ias_apis=[dependency が指すAPI権限グループ]）"| SDK
+    SDK -->|"⑤ token を付けて呼び出し"| SRV
+    SRV -->|"⑥ ias_apis を検証して認可"| SRV
+
+    style D fill:#d5f9e0,stroke:#27ae60,color:#1a1a1a
+    style SDK fill:#d5e8f9,stroke:#2980b9,color:#1a1a1a
+    style IAS fill:#f9e6d5,stroke:#e67e22,color:#1a1a1a
+    style SRV fill:#d5f9e0,stroke:#27ae60,color:#1a1a1a
+```
 
 - 前提: 両アプリが同じ IAS テナントを信頼し、IAS 側で dependency が登録済み（§2）。
 - **ユーザー文脈の伝播（named user＝ログインユーザ / technical user）は Destination の認証タイプでは決まりません**。`NoAuthentication` は「Destination に資格情報を持たせない」ことを指定するだけで、テクニカルユーザ／ログインユーザのどちらで呼ぶかは**別途 CAP 側で指定**します。
@@ -182,6 +222,36 @@ CAP プラグインを使わない場合や、汎用の Destination サービス
 - **`OAuth2JWTBearer`** — 主体伝播。ログインユーザーの文脈を**維持**（別トークン種別からは token exchange 系）。
 
 > `OAuth2JWTBearer`（IAS）は **跨サブアカウント／跨リージョン**でもそのまま使えます。信頼は IAS テナントの dependency に集約されるため、XSUAA の `OAuth2SAMLBearerAssertion` で必要だった **サブアカウント間の SAML 信頼設定は不要**です（変化点の詳細は [02 §5](02-authentication.md)）。
+
+**トークン取得の流れ（トークン発行依頼元＝Destination Service）**: §3.1 との違いは、資格情報を **Destination 自身が保持**し、**IAS への依頼自体も Destination Service が代行**する点です。Consumer アプリは IAS に直接アクセスせず、Destination Service から**取得済みのトークン**を受け取ります(`OAuth2JWTBearer` の場合はアプリが持つログインユーザーの JWT を assertion として Destination Service に渡す必要があります)。
+
+```mermaid
+flowchart LR
+    subgraph C["Consumer アプリ"]
+        APP["アプリ本体"]
+    end
+    subgraph DEST["Destination Service"]
+        D["app2app<br/>Authentication=OAuth2ClientCredentials<br/>または OAuth2JWTBearer<br/>clientId/clientSecret 保持<br/>tokenService.body.resource=urn:...dependency名"]
+    end
+    IAS["IAS トークンエンドポイント<br/>（tokenServiceURL）"]
+    subgraph P["Provider アプリ"]
+        SRV["API"]
+    end
+
+    APP -->|"① Destination app2app の解決を要求<br/>（JWT bearer時はユーザーJWTを添えて渡す）"| D
+    D -->|"② 自身が保持する clientId/clientSecret で<br/>client_credentials（技術通信）または<br/>JWT bearer（主体伝播）＋<br/>resource=urn:...dependency名 を依頼"| IAS
+    IAS -->|"③ token 発行<br/>（aud=Provider, ias_apis=[dependency が指すAPI権限グループ]）"| D
+    D -->|"④ 取得済みトークンを含む<br/>解決済み Destination を返す"| APP
+    APP -->|"⑤ token を付けて呼び出し"| SRV
+    SRV -->|"⑥ ias_apis を検証して認可"| SRV
+
+    style D fill:#f9e6d5,stroke:#e67e22,color:#1a1a1a
+    style IAS fill:#f9e6d5,stroke:#e67e22,color:#1a1a1a
+    style APP fill:#d5e8f9,stroke:#2980b9,color:#1a1a1a
+    style SRV fill:#d5f9e0,stroke:#27ae60,color:#1a1a1a
+```
+
+> **出典**: SAP BTP Connectivity 公式ドキュメント（OAuth Client Credentials / OAuth SAML Bearer Assertion 認証タイプ）が示すとおり、**Destination Service がクライアント資格情報を使ってトークンを取得・キャッシュし、解決済み Destination に含めてアプリへ返す**のが標準動作です。アプリ自身が IAS の token endpoint を直接叩くことはありません。
 
 以下は主体伝播（`OAuth2JWTBearer`）の例です。技術通信なら `Authentication` を `OAuth2ClientCredentials` に変えます（`tokenService.body.resource` の dependency 指定は同じ）。
 
@@ -275,13 +345,15 @@ CAP プラグインを使わない場合や、汎用の Destination サービス
 
 xs-app.json 側は通常どおり `"authenticationType": "ias"` を指定するだけで、資格情報は一切書きません。
 
+**トークン取得の流れ（トークン発行依頼元＝Work Zone 組み込み approuter）**: `NoAuthentication` のため Destination Service はここでも資格情報・トークンを持たず、ルーティング情報（dependency 名）を返すだけです（§3.1 と同型）。実際に IAS へトークン交換を依頼するのは **approuter 自身**で、Consumer アプリ（UI5）でも Destination Service でもありません。
+
 ```mermaid
 flowchart LR
     subgraph WZ["Work Zone（html5-apps-repo ランタイム）"]
         UI5["UI5 アプリ"] --> AR["組み込み approuter"]
     end
     subgraph DEST["Destination Service"]
-        D["incidents-management-srv-api<br/>Authentication=NoAuthentication<br/>HTML5.IASDependencyName=incidents-api"]
+        D["incidents-management-srv-api<br/>Authentication=NoAuthentication<br/>HTML5.IASDependencyName=incidents-api<br/>資格情報・トークンは持たない"]
     end
     subgraph IAS["IAS テナント"]
         WZAPP["Work Zone の IAS アプリ<br/>dependency: incidents-api"]
@@ -292,8 +364,8 @@ flowchart LR
     end
 
     UI5 -->|"① ログインユーザの IAS トークン"| AR
-    AR -->|"② Destination 解決<br/>→ dependency 名を検知"| D
-    AR -->|"③ dependency=incidents-api で<br/>トークン交換要求"| WZAPP
+    AR -->|"② Destination 解決<br/>→ dependency 名のみ取得（トークンは含まない）"| D
+    AR -->|"③ dependency=incidents-api で<br/>トークン交換を依頼"| WZAPP
     WZAPP -.dependency 参照.-> PROVAPP
     WZAPP -->|"④ 交換後トークン<br/>aud=Provider, ias_apis=[incidents-api]"| AR
     AR -->|"⑤ 交換後トークンを付けて呼び出し"| SRV
